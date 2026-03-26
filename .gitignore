@@ -1,0 +1,24 @@
+# Secrets — JANGAN pernah commit ke git
+.env
+
+# ChromaDB / TF-IDF index cache (semua variant)
+.chromadb/
+.chromadb2/
+.chromadb_old/
+*.pkl
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# Model cache
+.cache/
+model/
+
+# OS
+.DS_Store
+Thumbs.db
