@@ -314,6 +314,10 @@ INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
 
 Verifikasi backend berjalan:
 ```bash
+# Windows (PowerShell) — gunakan curl.exe agar tidak muncul peringatan
+curl.exe http://localhost:8000/api/health
+
+# Mac / Linux
 curl http://localhost:8000/api/health
 ```
 ```json
@@ -395,8 +399,13 @@ pkill -f "uvicorn|streamlit"
 
 **Verifikasi sudah berhenti:**
 ```bash
-curl http://localhost:8000/api/health   # → connection refused = berhasil stop
-curl http://localhost:8501              # → connection refused = berhasil stop
+# Windows (PowerShell)
+curl.exe http://localhost:8000/api/health   # → connection refused = berhasil stop
+curl.exe http://localhost:8501              # → connection refused = berhasil stop
+
+# Mac / Linux
+curl http://localhost:8000/api/health
+curl http://localhost:8501
 ```
 
 ---
@@ -412,7 +421,8 @@ curl http://localhost:8501              # → connection refused = berhasil stop
 | Isi API keys | Edit `.env`: `TAVILY_API_KEY` + `OPENAI_API_KEY` (OpenRouter) | Editor teks |
 | Jalankan backend | `uvicorn main:app --reload --port 8000` | Terminal 1 |
 | Jalankan frontend | `streamlit run app.py` | Terminal 2 |
-| Cek health | `curl http://localhost:8000/api/health` | Terminal mana saja |
+| Cek health (Windows) | `curl.exe http://localhost:8000/api/health` | Terminal mana saja |
+| Cek health (Mac/Linux) | `curl http://localhost:8000/api/health` | Terminal mana saja |
 | Buka UI | Buka browser → `http://localhost:8501` | Browser |
 | **Stop backend** | `Ctrl+C` | Terminal 1 |
 | **Stop frontend** | `Ctrl+C` | Terminal 2 |
