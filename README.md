@@ -66,10 +66,10 @@ Sistem rekomendasi karier berbasis AI untuk pasar kerja Indonesia. Menggunakan a
 | Agent | File | LLM (default via OpenRouter) | Berjalan | Input | Output |
 |---|---|---|---|---|---|
 | **Coordinator** | `agents/coordinator.py` | — (no LLM) | Sequential | cv_text, target_role | validasi + routing |
-| **Profiler** | `agents/profiler.py` | `PROFILER_MODEL` (default: x-ai/grok-4-fast) | **PARALEL** | cv_text, github_url, additional_context, attachments_text | `user_profile` (JSON) |
-| **Market Analyst** | `agents/analyst.py` | `ANALYST_MODEL` (default: x-ai/grok-4-fast) | **PARALEL** | target_role | `market_data` (JSON) via Tavily |
-| **Gap Analyzer** | `agents/gap_analyzer.py` | `GAP_MODEL` (default: anthropic/claude-sonnet-4-6) | Sequential (Fan-In) | user_profile + market_data | `skill_gaps` (JSON) |
-| **Strategist** | `agents/strategist.py` | `STRATEGIST_MODEL` (default: anthropic/claude-sonnet-4-6) | Sequential | semua output + additional_context | `roadmap` (Markdown) |
+| **Profiler** | `agents/profiler.py` | `PROFILER_MODEL` = x-ai/grok-4-fast | **PARALEL** | cv_text, github_url, additional_context, attachments_text | `user_profile` (JSON) |
+| **Market Analyst** | `agents/analyst.py` | `ANALYST_MODEL` = qwen/qwen3.5-9b | **PARALEL** | target_role | `market_data` (JSON) via Tavily |
+| **Gap Analyzer** | `agents/gap_analyzer.py` | `GAP_MODEL` = anthropic/claude-sonnet-4-6 | Sequential (Fan-In) | user_profile + market_data | `skill_gaps` (JSON) |
+| **Strategist** | `agents/strategist.py` | `STRATEGIST_MODEL` = anthropic/claude-opus-4.5 | Sequential | semua output + additional_context | `roadmap` (Markdown) |
 
 ### Mengapa Paralel?
 
@@ -176,8 +176,10 @@ Field `messages`, `error`, dan `status` menggunakan **reducer** agar kedua agent
 | **Orchestrasi Agent** | LangGraph 0.2+ | Fan-Out/Fan-In paralel dengan Send API |
 | **LLM Framework** | LangChain 0.2+ | Abstraksi model, prompt management |
 | **LLM Provider** | OpenRouter | Satu endpoint untuk semua model: Claude, Grok, GPT-4o, Gemini, dll. |
-| **Model Paralel** | `PROFILER_MODEL` + `ANALYST_MODEL` | Default: x-ai/grok-4-fast (cepat + murah) |
-| **Model Sequential** | `GAP_MODEL` + `STRATEGIST_MODEL` | Default: anthropic/claude-sonnet-4-6 (kualitas terbaik) |
+| **Model Paralel (Profiler)** | x-ai/grok-4-fast | Ekstraksi CV — cepat & murah |
+| **Model Paralel (Analyst)** | qwen/qwen3.5-9b | Agregasi data pasar — hemat & efisien |
+| **Model Sequential (Gap)** | anthropic/claude-sonnet-4-6 | Reasoning skill gap — kualitas tinggi |
+| **Model Sequential (Strategist)** | anthropic/claude-opus-4.5 | Roadmap 6 bulan — kualitas terbaik |
 | **Job Search Real-Time** | Tavily Search API | LinkedIn, JobStreet, Glints — 1.000 req/bulan gratis |
 | **Semantic Search** | FAISS IndexFlatIP + OpenAI Embeddings | `text-embedding-3-small` via OpenRouter; fallback TF-IDF |
 | **Bootcamp Info** | Tavily Search API | Dicoding, Bangkit, Hacktiv8, Binar, RevoU — real-time |
@@ -598,18 +600,15 @@ OPENAI_BASE_URL=https://openrouter.ai/api/v1
 PROFILER_MODEL=x-ai/grok-4-fast
 
 # Market Analyst Agent — berjalan PARALEL, prioritas kecepatan & biaya
-# Default: x-ai/grok-4-fast
-ANALYST_MODEL=x-ai/grok-4-fast
+ANALYST_MODEL=qwen/qwen3.5-9b
 
 # Gap Analyzer Agent — sequential Fan-In, prioritas reasoning
-# Default: anthropic/claude-sonnet-4-6
 # Alternatif: openai/gpt-4o, google/gemini-pro-1.5
 GAP_MODEL=anthropic/claude-sonnet-4-6
 
-# Strategist Agent — sequential, output roadmap terpanjang
-# Default: anthropic/claude-sonnet-4-6
-# Alternatif terbaik: anthropic/claude-opus-4, openai/o3
-STRATEGIST_MODEL=anthropic/claude-sonnet-4-6
+# Strategist Agent — sequential, output roadmap terpanjang (kualitas terbaik)
+# Alternatif: anthropic/claude-sonnet-4-6, openai/o3
+STRATEGIST_MODEL=anthropic/claude-opus-4.5
 
 # ─── Token & Temperature ────────────────────────────────────
 
