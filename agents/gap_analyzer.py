@@ -2,16 +2,16 @@
 Gap Analyzer Agent — Fan-In Node
 Waits for both Profiler and Market Analyst to complete, then computes skill gaps.
 
-Model: claude-sonnet-4-6 (Anthropic) — best balance of reasoning & speed.
+Model: GAP_MODEL via OpenRouter (default: anthropic/claude-sonnet-4-6).
 This is the critical Fan-In node: wrong gap analysis = wrong roadmap.
-Cost: $3/MTok input, $15/MTok output. Worth it — this output feeds the Strategist.
+Override model: set GAP_MODEL di .env (contoh: openai/gpt-4o)
 """
 import os
 import json
 import logging
 from langchain_core.messages import SystemMessage, HumanMessage
 from state import CareerState
-from agents.llm_factory import get_quality_llm
+from agents.llm_factory import get_gap_llm
 
 logger = logging.getLogger(__name__)
 
@@ -41,11 +41,8 @@ Kembalikan HANYA JSON valid (tanpa markdown):
 
 
 def _get_llm():
-    """
-    Gap Analyzer: quality model (Sonnet).
-    Primary: Anthropic. Fallback: OpenRouter.
-    """
-    return get_quality_llm(temperature=0.1, max_tokens=3000)
+    """Gap Analyzer: GAP_MODEL via OpenRouter."""
+    return get_gap_llm(temperature=0.1, max_tokens=3000)
 
 
 def gap_analyzer_node(state: CareerState) -> dict:

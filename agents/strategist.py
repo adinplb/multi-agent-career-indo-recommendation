@@ -3,16 +3,15 @@ Strategist Agent
 Builds a personalized 6-month career roadmap in Bahasa Indonesia.
 Focuses on Indonesian learning platforms, certifications, and networking communities.
 
-Model: claude-sonnet-4-6 (Anthropic) — best quality for long-form Bahasa Indonesia.
+Model: STRATEGIST_MODEL via OpenRouter (default: anthropic/claude-sonnet-4-6).
 This is the final user-facing output — the roadmap the user will actually follow.
-Claude Sonnet has excellent Indonesian language understanding and cultural context.
-Cost: $3/MTok input, $15/MTok output. Most important output — quality justified.
+Override model: set STRATEGIST_MODEL di .env (contoh: anthropic/claude-opus-4)
 """
 import os
 import logging
 from langchain_core.messages import SystemMessage, HumanMessage
 from state import CareerState
-from agents.llm_factory import get_quality_llm, AI_RECOMMENDATION_TEMPERATURE, AI_MAX_TOKENS
+from agents.llm_factory import get_strategist_llm, AI_RECOMMENDATION_TEMPERATURE, AI_MAX_TOKENS
 
 logger = logging.getLogger(__name__)
 
@@ -65,12 +64,11 @@ FORMAT OUTPUT (Markdown dalam Bahasa Indonesia, semi-formal dan menyemangati):
 
 def _get_llm():
     """
-    Strategist: quality model — long-form Bahasa Indonesia roadmap.
+    Strategist: STRATEGIST_MODEL via OpenRouter — long-form Bahasa Indonesia roadmap.
     Uses AI_RECOMMENDATION_TEMPERATURE (default 0.3) for engaging output.
     max_tokens overridden to 4096 — roadmap is the longest output.
-    Primary: Anthropic Sonnet. Fallback: OpenRouter AI_MODEL.
     """
-    return get_quality_llm(temperature=AI_RECOMMENDATION_TEMPERATURE, max_tokens=4096)
+    return get_strategist_llm(temperature=AI_RECOMMENDATION_TEMPERATURE, max_tokens=4096)
 
 
 def strategist_node(state: CareerState) -> dict:

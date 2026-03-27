@@ -1,121 +1,123 @@
 """
-LLM Factory — Centralized model selection with Anthropic primary + OpenRouter fallback.
+LLM Factory — Per-agent model assignment via OpenRouter.
 
-Priority:
-  1. Anthropic API (ANTHROPIC_API_KEY) — primary
-     - Parallel agents  (Profiler, Analyst)        → claude-haiku-4-5  (fast & cheap)
-     - Sequential agents (Gap Analyzer, Strategist) → claude-sonnet-4-6 (best reasoning)
+Semua agent menggunakan OpenRouter (https://openrouter.ai/api/v1) sebagai provider.
+Setiap agent bisa dikonfigurasi model yang berbeda via .env — tidak perlu ubah kode.
 
-  2. OpenRouter fallback (OPENAI_API_KEY + OPENAI_BASE_URL)
-     - All agents → AI_MODEL (default: x-ai/grok-4-fast)
-     - Uses AI_TEMPERATURE / AI_RECOMMENDATION_TEMPERATURE
-     - Uses AI_MAX_TOKENS
+Model defaults:
+  Profiler   (paralel, ekstraksi CV)      → x-ai/grok-4-fast
+  Analyst    (paralel, riset pasar)        → x-ai/grok-4-fast
+  Gap Analyzer (sequential, reasoning)    → anthropic/claude-sonnet-4-6
+  Strategist  (sequential, roadmap panjang)→ anthropic/claude-sonnet-4-6
 
-Shared settings from .env:
+Semua model diakses via satu endpoint OpenRouter — bisa mix Opus, Grok, GPT-4o, dll.
+Paralel tetap berjalan normal — LangGraph Fan-Out/Fan-In tidak terpengaruh model.
+
+Shared settings (dari .env):
   AI_MAX_TOKENS                   — max output tokens (default: 1200)
-  AI_TEMPERATURE                  — default temperature for extraction agents (default: 0.35)
-  AI_RECOMMENDATION_TEMPERATURE   — temperature for Strategist roadmap (default: 0.3)
+  AI_TEMPERATURE                  — temperature untuk agent ekstraksi (default: 0.35)
+  AI_RECOMMENDATION_TEMPERATURE   — temperature untuk Strategist (default: 0.3)
 """
 import os
 import logging
+from langchain_openai import ChatOpenAI
 
 logger = logging.getLogger(__name__)
 
-# Anthropic primary
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
-
-# OpenRouter fallback (uses standard OPENAI_* variable names)
+# OpenRouter — satu provider untuk semua agent
 OPENAI_API_KEY  = os.getenv("OPENAI_API_KEY", "")
 OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://openrouter.ai/api/v1")
-AI_MODEL        = os.getenv("AI_MODEL", "x-ai/grok-4-fast")
+
+# Model per agent — dikonfigurasi via .env
+PROFILER_MODEL   = os.getenv("PROFILER_MODEL",   "x-ai/grok-4-fast")
+ANALYST_MODEL    = os.getenv("ANALYST_MODEL",    "x-ai/grok-4-fast")
+GAP_MODEL        = os.getenv("GAP_MODEL",        "anthropic/claude-sonnet-4-6")
+STRATEGIST_MODEL = os.getenv("STRATEGIST_MODEL", "anthropic/claude-sonnet-4-6")
 
 # Shared LLM settings
-AI_MAX_TOKENS                  = int(os.getenv("AI_MAX_TOKENS", "1200"))
-AI_TEMPERATURE                 = float(os.getenv("AI_TEMPERATURE", "0.35"))
-AI_RECOMMENDATION_TEMPERATURE  = float(os.getenv("AI_RECOMMENDATION_TEMPERATURE", "0.3"))
-
-# Anthropic model IDs
-HAIKU_MODEL  = os.getenv("PROFILER_MODEL", "claude-haiku-4-5-20251001")
-SONNET_MODEL = os.getenv("GAP_MODEL",      "claude-sonnet-4-6")
+AI_MAX_TOKENS                 = int(os.getenv("AI_MAX_TOKENS", "1200"))
+AI_TEMPERATURE                = float(os.getenv("AI_TEMPERATURE", "0.35"))
+AI_RECOMMENDATION_TEMPERATURE = float(os.getenv("AI_RECOMMENDATION_TEMPERATURE", "0.3"))
 
 
-def _use_anthropic() -> bool:
-    return bool(ANTHROPIC_API_KEY)
-
-
-def _use_openrouter() -> bool:
-    return bool(OPENAI_API_KEY)
-
-
-def get_fast_llm(temperature: float = None, max_tokens: int = None):
-    """
-    Fast/cheap model for parallel agents (Profiler, Analyst).
-    - Anthropic: claude-haiku-4-5  ($1/$5 per MTok)
-    - OpenRouter fallback: AI_MODEL (x-ai/grok-4-fast)
-
-    Uses AI_TEMPERATURE and AI_MAX_TOKENS from .env if not explicitly passed.
-    """
-    temp       = temperature if temperature is not None else AI_TEMPERATURE
-    max_tok    = max_tokens  if max_tokens  is not None else AI_MAX_TOKENS
-
-    if _use_anthropic():
-        from langchain_anthropic import ChatAnthropic
-        logger.debug(f"LLM [fast]: Anthropic {HAIKU_MODEL}")
-        return ChatAnthropic(
-            model=HAIKU_MODEL,
-            api_key=ANTHROPIC_API_KEY,
-            temperature=temp,
-            max_tokens=max_tok,
+def _build_llm(model: str, temperature: float, max_tokens: int) -> ChatOpenAI:
+    if not OPENAI_API_KEY:
+        raise EnvironmentError(
+            "OPENAI_API_KEY tidak ditemukan. Set OPENAI_API_KEY di file .env "
+            "(gunakan API key dari https://openrouter.ai)"
         )
-
-    if _use_openrouter():
-        from langchain_openai import ChatOpenAI
-        logger.debug(f"LLM [fast]: OpenRouter {AI_MODEL}")
-        return ChatOpenAI(
-            model=AI_MODEL,
-            api_key=OPENAI_API_KEY,
-            base_url=OPENAI_BASE_URL,
-            temperature=temp,
-            max_tokens=max_tok,
-        )
-
-    raise EnvironmentError(
-        "Tidak ada API key LLM. Set ANTHROPIC_API_KEY atau OPENAI_API_KEY di file .env"
+    logger.debug(f"LLM: OpenRouter model={model} temp={temperature} max_tokens={max_tokens}")
+    return ChatOpenAI(
+        model=model,
+        api_key=OPENAI_API_KEY,
+        base_url=OPENAI_BASE_URL,
+        temperature=temperature,
+        max_tokens=max_tokens,
     )
 
 
-def get_quality_llm(temperature: float = None, max_tokens: int = None):
+def get_profiler_llm(temperature: float = None, max_tokens: int = None) -> ChatOpenAI:
     """
-    High-quality model for critical sequential agents (Gap Analyzer, Strategist).
-    - Anthropic: claude-sonnet-4-6  ($3/$15 per MTok)
-    - OpenRouter fallback: AI_MODEL (x-ai/grok-4-fast)
-
-    Strategist uses AI_RECOMMENDATION_TEMPERATURE from .env.
+    Profiler Agent — berjalan PARALEL dengan Analyst.
+    Default: x-ai/grok-4-fast (cepat, murah, cukup untuk ekstraksi CV).
+    Override: set PROFILER_MODEL di .env (contoh: anthropic/claude-opus-4)
     """
-    temp    = temperature if temperature is not None else AI_TEMPERATURE
-    max_tok = max_tokens  if max_tokens  is not None else AI_MAX_TOKENS
-
-    if _use_anthropic():
-        from langchain_anthropic import ChatAnthropic
-        logger.debug(f"LLM [quality]: Anthropic {SONNET_MODEL}")
-        return ChatAnthropic(
-            model=SONNET_MODEL,
-            api_key=ANTHROPIC_API_KEY,
-            temperature=temp,
-            max_tokens=max_tok,
-        )
-
-    if _use_openrouter():
-        from langchain_openai import ChatOpenAI
-        logger.debug(f"LLM [quality]: OpenRouter {AI_MODEL}")
-        return ChatOpenAI(
-            model=AI_MODEL,
-            api_key=OPENAI_API_KEY,
-            base_url=OPENAI_BASE_URL,
-            temperature=temp,
-            max_tokens=max_tok,
-        )
-
-    raise EnvironmentError(
-        "Tidak ada API key LLM. Set ANTHROPIC_API_KEY atau OPENAI_API_KEY di file .env"
+    return _build_llm(
+        model=PROFILER_MODEL,
+        temperature=temperature if temperature is not None else AI_TEMPERATURE,
+        max_tokens=max_tokens if max_tokens is not None else AI_MAX_TOKENS,
     )
+
+
+def get_analyst_llm(temperature: float = None, max_tokens: int = None) -> ChatOpenAI:
+    """
+    Market Analyst Agent — berjalan PARALEL dengan Profiler.
+    Default: x-ai/grok-4-fast (cepat, cukup untuk agregasi data pasar).
+    Override: set ANALYST_MODEL di .env
+    """
+    return _build_llm(
+        model=ANALYST_MODEL,
+        temperature=temperature if temperature is not None else AI_TEMPERATURE,
+        max_tokens=max_tokens if max_tokens is not None else AI_MAX_TOKENS,
+    )
+
+
+def get_gap_llm(temperature: float = None, max_tokens: int = None) -> ChatOpenAI:
+    """
+    Gap Analyzer Agent — sequential (Fan-In), butuh reasoning lebih baik.
+    Default: anthropic/claude-sonnet-4-6 (via OpenRouter).
+    Override: set GAP_MODEL di .env (contoh: openai/gpt-4o)
+    """
+    return _build_llm(
+        model=GAP_MODEL,
+        temperature=temperature if temperature is not None else AI_TEMPERATURE,
+        max_tokens=max_tokens if max_tokens is not None else AI_MAX_TOKENS,
+    )
+
+
+def get_strategist_llm(temperature: float = None, max_tokens: int = None) -> ChatOpenAI:
+    """
+    Strategist Agent — sequential, output terpanjang (roadmap 6 bulan Bahasa Indonesia).
+    Default: anthropic/claude-sonnet-4-6 (via OpenRouter).
+    Override: set STRATEGIST_MODEL di .env (contoh: anthropic/claude-opus-4)
+    Uses AI_RECOMMENDATION_TEMPERATURE by default.
+    """
+    return _build_llm(
+        model=STRATEGIST_MODEL,
+        temperature=temperature if temperature is not None else AI_RECOMMENDATION_TEMPERATURE,
+        max_tokens=max_tokens if max_tokens is not None else AI_MAX_TOKENS,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Legacy aliases — dipertahankan agar tidak ada import error di file lain
+# yang masih memanggil get_fast_llm() / get_quality_llm()
+# ---------------------------------------------------------------------------
+def get_fast_llm(temperature: float = None, max_tokens: int = None) -> ChatOpenAI:
+    """Alias untuk get_profiler_llm() — backward compat."""
+    return get_profiler_llm(temperature=temperature, max_tokens=max_tokens)
+
+
+def get_quality_llm(temperature: float = None, max_tokens: int = None) -> ChatOpenAI:
+    """Alias untuk get_gap_llm() — backward compat."""
+    return get_gap_llm(temperature=temperature, max_tokens=max_tokens)

@@ -63,13 +63,13 @@ Sistem rekomendasi karier berbasis AI untuk pasar kerja Indonesia. Menggunakan a
 
 ### Penjelasan Setiap Agent
 
-| Agent | File | LLM | Berjalan | Input | Output |
+| Agent | File | LLM (default via OpenRouter) | Berjalan | Input | Output |
 |---|---|---|---|---|---|
 | **Coordinator** | `agents/coordinator.py` | — (no LLM) | Sequential | cv_text, target_role | validasi + routing |
-| **Profiler** | `agents/profiler.py` | Haiku / grok-4-fast | **PARALEL** | cv_text, github_url, additional_context, attachments_text | `user_profile` (JSON) |
-| **Market Analyst** | `agents/analyst.py` | Haiku / grok-4-fast | **PARALEL** | target_role | `market_data` (JSON) via Tavily |
-| **Gap Analyzer** | `agents/gap_analyzer.py` | Sonnet / grok-4-fast | Sequential (Fan-In) | user_profile + market_data | `skill_gaps` (JSON) |
-| **Strategist** | `agents/strategist.py` | Sonnet / grok-4-fast | Sequential | semua output + additional_context | `roadmap` (Markdown) |
+| **Profiler** | `agents/profiler.py` | `PROFILER_MODEL` = x-ai/grok-4-fast | **PARALEL** | cv_text, github_url, additional_context, attachments_text | `user_profile` (JSON) |
+| **Market Analyst** | `agents/analyst.py` | `ANALYST_MODEL` = qwen/qwen3.5-9b | **PARALEL** | target_role | `market_data` (JSON) via Tavily |
+| **Gap Analyzer** | `agents/gap_analyzer.py` | `GAP_MODEL` = anthropic/claude-sonnet-4-6 | Sequential (Fan-In) | user_profile + market_data | `skill_gaps` (JSON) |
+| **Strategist** | `agents/strategist.py` | `STRATEGIST_MODEL` = anthropic/claude-opus-4.5 | Sequential | semua output + additional_context | `roadmap` (Markdown) |
 
 ### Mengapa Paralel?
 
@@ -84,8 +84,8 @@ def fan_out_router(state: CareerState):
     ]
 ```
 
-- Profiler menganalisis CV pengguna (+ konteks tambahan + file lampiran)
-- Analyst secara bersamaan mencari data lowongan + gaji di pasar Indonesia via Tavily
+- Profiler menganalisis CV pengguna (+ konteks tambahan + file lampiran) — model dikonfigurasi via `PROFILER_MODEL`
+- Analyst secara bersamaan mencari data lowongan + gaji di pasar Indonesia via Tavily — model dikonfigurasi via `ANALYST_MODEL`
 - Gap Analyzer baru berjalan setelah **keduanya selesai** (Fan-In otomatis oleh LangGraph)
 - Total waktu = `max(waktu_profiler, waktu_analyst)` bukan jumlahnya — **~40-50% lebih cepat**
 
@@ -175,8 +175,11 @@ Field `messages`, `error`, dan `status` menggunakan **reducer** agar kedua agent
 |---|---|---|
 | **Orchestrasi Agent** | LangGraph 0.2+ | Fan-Out/Fan-In paralel dengan Send API |
 | **LLM Framework** | LangChain 0.2+ | Abstraksi model, prompt management |
-| **LLM Primary** | Claude Haiku/Sonnet (Anthropic) | Jika `ANTHROPIC_API_KEY` diset |
-| **LLM Fallback** | x-ai/grok-4-fast (OpenRouter) | Jika hanya `OPENAI_API_KEY` yang diset |
+| **LLM Provider** | OpenRouter | Satu endpoint untuk semua model: Claude, Grok, GPT-4o, Gemini, dll. |
+| **Model Paralel (Profiler)** | x-ai/grok-4-fast | Ekstraksi CV — cepat & murah |
+| **Model Paralel (Analyst)** | qwen/qwen3.5-9b | Agregasi data pasar — hemat & efisien |
+| **Model Sequential (Gap)** | anthropic/claude-sonnet-4-6 | Reasoning skill gap — kualitas tinggi |
+| **Model Sequential (Strategist)** | anthropic/claude-opus-4.5 | Roadmap 6 bulan — kualitas terbaik |
 | **Job Search Real-Time** | Tavily Search API | LinkedIn, JobStreet, Glints — 1.000 req/bulan gratis |
 | **Semantic Search** | FAISS IndexFlatIP + OpenAI Embeddings | `text-embedding-3-small` via OpenRouter; fallback TF-IDF |
 | **Bootcamp Info** | Tavily Search API | Dicoding, Bangkit, Hacktiv8, Binar, RevoU — real-time |
@@ -272,15 +275,18 @@ Buka `.env` dengan editor teks dan isi nilai yang diperlukan:
 # Daftar gratis di https://tavily.com (1.000 req/bulan gratis)
 TAVILY_API_KEY=tvly-xxxxxxxxxxxxxxxx
 
-# ── Pilih salah satu provider LLM ────────────────────────────
-
-# Opsi A: Anthropic (direkomendasikan — Haiku untuk paralel, Sonnet untuk sequential)
-ANTHROPIC_API_KEY=sk-ant-xxxxxxxxxxxxxxxx
-
-# Opsi B: OpenRouter (alternatif — juga dipakai untuk embedding text-embedding-3-small)
+# ── OpenRouter — satu provider untuk semua agent ─────────────
+# Daftar di https://openrouter.ai — satu key akses semua model
+# Juga digunakan untuk FAISS embeddings (text-embedding-3-small)
 OPENAI_API_KEY=sk-or-v1-xxxxxxxxxxxxxxxx
 OPENAI_BASE_URL=https://openrouter.ai/api/v1
-AI_MODEL=x-ai/grok-4-fast
+
+# ── Model per agent ───────────────────────────────────────────
+# Lihat daftar model: https://openrouter.ai/models
+PROFILER_MODEL=x-ai/grok-4-fast           # paralel — prioritas kecepatan
+ANALYST_MODEL=x-ai/grok-4-fast            # paralel — prioritas kecepatan
+GAP_MODEL=anthropic/claude-sonnet-4-6     # sequential — prioritas kualitas
+STRATEGIST_MODEL=anthropic/claude-sonnet-4-6  # sequential — roadmap panjang
 
 # ── Parameter LLM (opsional, sudah ada default) ─────────────
 AI_MAX_TOKENS=1200
@@ -289,7 +295,7 @@ AI_RECOMMENDATION_TEMPERATURE=0.3
 EMBEDDING_MODEL=text-embedding-3-small
 ```
 
-> **Catatan:** Jika kedua key diisi, sistem otomatis pakai Anthropic (primary) dan OpenRouter sebagai fallback. `OPENAI_API_KEY` juga digunakan untuk FAISS embeddings via OpenRouter.
+> **Catatan:** Semua model diakses via satu endpoint OpenRouter. Bisa mix model dari provider berbeda — misalnya Profiler pakai Grok, Strategist pakai Claude Opus.
 
 ### Langkah 5 — Jalankan FastAPI Backend
 
@@ -578,15 +584,31 @@ Semua parameter AI dikontrol dari file `.env` — **tidak perlu mengubah kode**.
 # Budget per analisis: ~4 credits (jobs + salary + trends + bootcamp)
 TAVILY_API_KEY=tvly-...
 
-# ─── LLM Provider ───────────────────────────────────────────
-
-# Opsi A: Anthropic (primary — Haiku untuk paralel, Sonnet untuk sequential)
-ANTHROPIC_API_KEY=sk-ant-...
-
-# Opsi B: OpenRouter (fallback — juga untuk FAISS embeddings text-embedding-3-small)
+# ─── OpenRouter — satu provider untuk semua agent ───────────
+# Daftar di https://openrouter.ai
+# Satu key ini mengakses semua model: Claude, Grok, GPT-4o, dll.
+# Juga digunakan untuk FAISS embeddings (text-embedding-3-small)
 OPENAI_API_KEY=sk-or-v1-...
 OPENAI_BASE_URL=https://openrouter.ai/api/v1
-AI_MODEL=x-ai/grok-4-fast
+
+# ─── Model per agent (via OpenRouter) ───────────────────────
+# Lihat semua model: https://openrouter.ai/models
+
+# Profiler Agent — berjalan PARALEL, prioritas kecepatan & biaya
+# Default: x-ai/grok-4-fast
+# Alternatif: anthropic/claude-haiku-4-5, google/gemini-flash-1.5
+PROFILER_MODEL=x-ai/grok-4-fast
+
+# Market Analyst Agent — berjalan PARALEL, prioritas kecepatan & biaya
+ANALYST_MODEL=qwen/qwen3.5-9b
+
+# Gap Analyzer Agent — sequential Fan-In, prioritas reasoning
+# Alternatif: openai/gpt-4o, google/gemini-pro-1.5
+GAP_MODEL=anthropic/claude-sonnet-4-6
+
+# Strategist Agent — sequential, output roadmap terpanjang (kualitas terbaik)
+# Alternatif: anthropic/claude-sonnet-4-6, openai/o3
+STRATEGIST_MODEL=anthropic/claude-opus-4.5
 
 # ─── Token & Temperature ────────────────────────────────────
 
@@ -600,20 +622,8 @@ AI_MAX_TOKENS=1200
 AI_TEMPERATURE=0.35
 
 # Kreativitas output untuk Strategist (roadmap — lebih naratif)
-# Sedikit lebih tinggi agar roadmap tidak kaku/template
 # Default: 0.3. Range rekomendasi: 0.3-0.6
 AI_RECOMMENDATION_TEMPERATURE=0.3
-
-# ─── Model Spesifik (jika pakai Anthropic) ──────────────────
-
-# Model untuk Profiler + Analyst (paralel, prioritas kecepatan & biaya)
-# Default: claude-haiku-4-5-20251001
-PROFILER_MODEL=claude-haiku-4-5-20251001
-
-# Model untuk Gap Analyzer + Strategist (sequential, prioritas kualitas reasoning)
-# Default: claude-sonnet-4-6
-# Alternatif lebih hemat: claude-haiku-4-5-20251001 (kualitas sedikit turun)
-GAP_MODEL=claude-sonnet-4-6
 
 # ─── Embedding Model ─────────────────────────────────────────
 # Digunakan untuk FAISS semantic search (via OpenRouter)
@@ -628,8 +638,8 @@ EMBEDDING_MODEL=text-embedding-3-small
 | Output JSON sering tidak valid | Turunkan `AI_TEMPERATURE` ke `0.05-0.1` |
 | Roadmap terasa terlalu kaku/template | Naikkan `AI_RECOMMENDATION_TEMPERATURE` ke `0.5-0.7` |
 | Analisis terlalu singkat | Naikkan `AI_MAX_TOKENS` ke `2000-4096` |
-| API terlalu lambat / mahal | Ganti `GAP_MODEL` ke `claude-haiku-4-5-20251001` |
-| Skill yang diekstrak terlalu sedikit | Naikkan `PROFILER_MODEL` ke `claude-sonnet-4-6` |
+| API terlalu lambat / mahal | Ganti `GAP_MODEL` dan `STRATEGIST_MODEL` ke model lebih murah (misal: `x-ai/grok-4-fast`) |
+| Skill yang diekstrak terlalu sedikit | Naikkan `PROFILER_MODEL` ke `anthropic/claude-sonnet-4-6` atau `openai/gpt-4o` |
 | Persentase kecocokan selalu 50% | Cek apakah `keterampilan_diminati` di market_data terisi |
 | Gaji tidak realistis | Cek fallback table di `tools/tavily_search.py` fungsi `search_salary_tavily()` |
 | Lowongan tidak relevan secara semantik | Cek OPENAI_API_KEY valid — FAISS embeddings menggunakan key ini |
@@ -642,10 +652,10 @@ Untuk mengubah perilaku agent, edit `SYSTEM_PROMPT` di masing-masing file agent:
 
 | Agent | File | Prompt yang bisa diubah |
 |---|---|---|
-| Profiler | `agents/profiler.py:19` | Format JSON output, kategori SKKNI, instruksi baca konteks |
-| Analyst | `agents/analyst.py:21` | Kota fokus, perusahaan referensi Indonesia |
-| Gap Analyzer | `agents/gap_analyzer.py:18` | Threshold penilaian, sertifikasi |
-| Strategist | `agents/strategist.py:19` | Platform belajar, format roadmap, instruksi personalisasi |
+| Profiler | [agents/profiler.py](agents/profiler.py) | Format JSON output, kategori SKKNI, instruksi baca konteks |
+| Analyst | [agents/analyst.py](agents/analyst.py) | Kota fokus, perusahaan referensi Indonesia |
+| Gap Analyzer | [agents/gap_analyzer.py](agents/gap_analyzer.py) | Threshold penilaian, sertifikasi |
+| Strategist | [agents/strategist.py](agents/strategist.py) | Platform belajar, format roadmap, instruksi personalisasi |
 
 ### Menambah Platform Belajar Baru ke Roadmap
 
