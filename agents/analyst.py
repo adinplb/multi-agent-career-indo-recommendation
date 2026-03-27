@@ -2,9 +2,9 @@
 Market Analyst Agent
 Mencari lowongan real-time (Tavily) dan mensintesis data pasar Indonesia via LLM.
 
-Model: claude-haiku-4-5-20251001 (Anthropic) — fastest + cheapest Claude.
+Model: ANALYST_MODEL via OpenRouter (default: x-ai/grok-4-fast).
 Runs in PARALLEL with Profiler → speed & cost optimized.
-Cost: $1/MTok input, $5/MTok output. Data aggregation task — Haiku is sufficient.
+Override model: set ANALYST_MODEL di .env
 
 Tavily credits per run: 4 (jobs + bootcamp + salary + trends).
 """
@@ -15,7 +15,7 @@ from state import CareerState
 from tools.vector_store import search_similar_jobs, get_or_build_job_collection, get_sbert_model
 from tools.tavily_search import search_bootcamp_tavily, extract_companies_from_jobs
 from tools.job_scraper import search_salary_trends, search_growth_trends
-from agents.llm_factory import get_fast_llm
+from agents.llm_factory import get_analyst_llm
 
 logger = logging.getLogger(__name__)
 
@@ -43,11 +43,8 @@ Kembalikan HANYA JSON valid (tanpa markdown):
 
 
 def _get_llm():
-    """
-    Analyst: fast/cheap model (Haiku).
-    Primary: Anthropic. Fallback: OpenRouter.
-    """
-    return get_fast_llm(temperature=0.1, max_tokens=2048)
+    """Analyst: ANALYST_MODEL via OpenRouter."""
+    return get_analyst_llm(temperature=0.1, max_tokens=2048)
 
 
 def analyst_node(state: CareerState) -> dict:

@@ -2,9 +2,9 @@
 Profiler Agent
 Analyzes user CV text to extract skills, hidden skills, and SKKNI category mappings.
 
-Model: claude-haiku-4-5-20251001 (Anthropic) — fastest + cheapest Claude.
+Model: PROFILER_MODEL via OpenRouter (default: x-ai/grok-4-fast).
 Runs in PARALLEL with Market Analyst → speed & cost optimized.
-Cost: $1/MTok input, $5/MTok output. A typical CV analysis uses ~2K tokens = ~$0.002.
+Override model: set PROFILER_MODEL di .env
 """
 import os
 import json
@@ -12,7 +12,7 @@ import logging
 from langchain_core.messages import SystemMessage, HumanMessage
 from state import CareerState
 from tools.cv_parser import extract_github_profile
-from agents.llm_factory import get_fast_llm
+from agents.llm_factory import get_profiler_llm
 
 logger = logging.getLogger(__name__)
 
@@ -53,11 +53,8 @@ Kembalikan HANYA JSON valid dengan struktur berikut (tanpa teks atau markdown di
 
 
 def _get_llm():
-    """
-    Profiler: fast/cheap model (Haiku).
-    Primary: Anthropic. Fallback: OpenRouter.
-    """
-    return get_fast_llm(temperature=0.1, max_tokens=2048)
+    """Profiler: PROFILER_MODEL via OpenRouter."""
+    return get_profiler_llm(temperature=0.1, max_tokens=2048)
 
 
 def profiler_node(state: CareerState) -> dict:
