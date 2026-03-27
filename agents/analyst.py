@@ -1,19 +1,20 @@
 """
 Market Analyst Agent
-Scans the local job database (ChromaDB) and live market (DuckDuckGo) for the target role.
-Synthesizes salary, growth trends, and top matching jobs via LLM.
+Mencari lowongan real-time (Tavily) dan mensintesis data pasar Indonesia via LLM.
 
 Model: claude-haiku-4-5-20251001 (Anthropic) — fastest + cheapest Claude.
 Runs in PARALLEL with Profiler → speed & cost optimized.
 Cost: $1/MTok input, $5/MTok output. Data aggregation task — Haiku is sufficient.
+
+Tavily credits per run: 4 (jobs + bootcamp + salary + trends).
 """
-import os
 import json
 import logging
 from langchain_core.messages import SystemMessage, HumanMessage
 from state import CareerState
-from tools.vector_store import get_or_build_job_collection, search_similar_jobs, search_by_skills, get_sbert_model
-from tools.job_scraper import search_jobs, search_salary_trends, search_growth_trends, search_indonesian_companies_hiring
+from tools.vector_store import search_similar_jobs, get_or_build_job_collection, get_sbert_model
+from tools.tavily_search import search_bootcamp_tavily, extract_companies_from_jobs
+from tools.job_scraper import search_salary_trends, search_growth_trends
 from agents.llm_factory import get_fast_llm
 
 logger = logging.getLogger(__name__)
@@ -67,56 +68,41 @@ def analyst_node(state: CareerState) -> dict:
 
         logger.info(f"Market Analyst: menganalisis pasar untuk '{target_role}'...")
 
-        # 1. Local ChromaDB search
+        # 1. Cari lowongan real-time via Tavily (LinkedIn + JobStreet + Glints) — 1 credit
         collection = get_or_build_job_collection()
-        model = get_sbert_model()
+        top_local_jobs = search_similar_jobs(collection, target_role, n_results=8)
 
-        local_jobs = search_similar_jobs(collection, target_role, model=model, n_results=10)
+        # 2. Bootcamp dan program belajar Indonesia — 1 credit
+        bootcamp_results = search_bootcamp_tavily(target_role, num_results=4)
 
-        # Also search by user's skills if available
-        user_skills = user_profile.get("keahlian_teknis", []) if user_profile else []
-        if user_skills:
-            skill_jobs = search_by_skills(collection, user_skills[:5], model=model, n_results=10)
-            # Merge and deduplicate
-            seen_ids = {j["job_id"] for j in local_jobs}
-            for job in skill_jobs:
-                if job["job_id"] not in seen_ids:
-                    local_jobs.append(job)
-                    seen_ids.add(job["job_id"])
-
-        top_local_jobs = local_jobs[:8]
-
-        # 2. Live job search via DuckDuckGo (free)
-        live_query = f"lowongan kerja {target_role} Indonesia Jakarta 2025"
-        live_jobs = search_jobs(live_query, num_results=5)
-
-        # 3b. Find Indonesian companies hiring for this role
-        indo_companies = search_indonesian_companies_hiring(target_role)
-
-        # 4. Salary trends
+        # 3. Data gaji Indonesia — 1 credit
         salary_data = search_salary_trends(target_role)
 
-        # 5. Growth trends
+        # 4. Tren pertumbuhan demand — 1 credit
         growth_data = search_growth_trends(target_role)
 
-        # 6. Build context for LLM synthesis
-        local_jobs_summary = "\n".join([
-            f"- {j['title']} di {j['company']} ({j['city']}) — {j['salary']}"
+        # Ekstrak perusahaan dari job snippets (0 credits tambahan)
+        indo_companies = extract_companies_from_jobs(top_local_jobs)
+
+        # Build context for LLM synthesis
+        jobs_summary = "\n".join([
+            f"- {j.get('title','?')} di {j.get('company','?')} ({j.get('city','?')}) "
+            f"[{j.get('source','?')}] — {j.get('snippet','')[:120]}"
             for j in top_local_jobs[:5]
         ])
 
-        live_jobs_summary = "\n".join([
-            f"- {j['title']}: {j['snippet'][:150]}"
-            for j in live_jobs[:5]
+        bootcamp_summary = "\n".join([
+            f"- {b['title']} ({b['company']}): {b['snippet'][:120]}"
+            for b in bootcamp_results[:3]
         ])
 
         context = f"""Target Role: {target_role}
 
-DATA LOWONGAN LOKAL (dari database 4000+ lowongan Indonesia):
-{local_jobs_summary or "Tidak ada data lowongan lokal."}
+DATA LOWONGAN REAL-TIME (dari Tavily — LinkedIn, JobStreet, Glints):
+{jobs_summary or "Tidak ada data lowongan terkini."}
 
-DATA LOWONGAN TERKINI (dari pencarian DuckDuckGo):
-{live_jobs_summary or "Tidak ada data lowongan terkini."}
+INFORMASI BOOTCAMP & PROGRAM BELAJAR RELEVAN (Indonesia):
+{bootcamp_summary or "Dicoding, Bangkit, Hacktiv8, Binar Academy, RevoU, Digitalent Kominfo"}
 
 PERUSAHAAN TEKNOLOGI INDONESIA YANG AKTIF HIRING:
 {', '.join(indo_companies) if indo_companies else 'Gojek, Tokopedia, Traveloka, Shopee, Grab'}
@@ -146,22 +132,34 @@ TREN PERTUMBUHAN: {growth_data['growth_signal']}
 
         market_data = json.loads(raw)
 
-        # Attach actual local jobs for display in UI
+        # Attach real-time jobs (LinkedIn + job boards) for display in UI
         market_data["pekerjaan_lokal"] = [
             {
                 "job_id": j.get("job_id", ""),
                 "title": j.get("title", ""),
-                "position": j.get("position", ""),
+                "position": j.get("title", ""),
                 "company": j.get("company", ""),
                 "city": j.get("city", ""),
                 "industry": j.get("industry", ""),
                 "salary": j.get("salary", ""),
                 "employment_type": j.get("employment_type", ""),
-                "education_required": j.get("education_required", ""),
-                "onet_soc_code": j.get("onet_soc_code", ""),
-                "match_score": round(1 - j.get("distance", 1), 3),
+                "link": j.get("link", ""),
+                "source": j.get("source", ""),
+                "snippet": j.get("snippet", ""),
+                "match_score": round(j.get("match_score", 0.8), 3),
             }
             for j in top_local_jobs[:5]
+        ]
+
+        # Attach bootcamp info for display in UI
+        market_data["bootcamp_info"] = [
+            {
+                "title": b.get("title", ""),
+                "platform": b.get("company", ""),
+                "link": b.get("link", ""),
+                "snippet": b.get("snippet", ""),
+            }
+            for b in bootcamp_results[:3]
         ]
 
         # Merge salary data from scraper if LLM data is missing

@@ -1,11 +1,10 @@
 """
 FastAPI Entry Point — Indo-Career AI Backend
 Serves the LangGraph multi-agent pipeline via HTTP API.
+Job data: Tavily real-time search + FAISS semantic embeddings.
 """
 import os
-# Force PyTorch backend for sentence-transformers before any imports
-os.environ.setdefault("USE_TF", "0")
-os.environ.setdefault("TRANSFORMERS_NO_TF", "1")
+import io
 import asyncio
 import logging
 from contextlib import asynccontextmanager
@@ -19,7 +18,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from tools.cv_parser import extract_text_from_pdf
-from tools.vector_store import get_or_build_job_collection, search_similar_jobs, get_sbert_model
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -28,21 +26,10 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
-    Warm up ChromaDB on startup (runs index build once, then fast path on reload).
-    Uses run_in_executor to avoid blocking the async event loop during SBERT encoding.
+    Startup: mode real-time aktif.
+    Tavily + FAISS — tidak ada dataset lokal yang di-load.
     """
-    logger.info("Indo-Career AI starting up — warming ChromaDB index...")
-    loop = asyncio.get_event_loop()
-    try:
-        await loop.run_in_executor(
-            None,
-            get_or_build_job_collection,
-            os.getenv("DATASET_PATH", "dataset/Filtered_Jobs_4000.csv"),
-            os.getenv("ONET_PATH", "dataset/Occupation Data.csv"),
-        )
-        logger.info("ChromaDB ready.")
-    except Exception as e:
-        logger.warning(f"ChromaDB warmup failed (non-fatal): {e}")
+    logger.info("Indo-Career AI starting up — Tavily + FAISS embeddings mode.")
     yield
     logger.info("Indo-Career AI shutting down.")
 
@@ -50,7 +37,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Indo-Career AI API",
     description="Multi-Agent Career Recommendation System untuk pasar kerja Indonesia",
-    version="1.0.0",
+    version="2.0.0",
     lifespan=lifespan,
 )
 
@@ -63,25 +50,62 @@ app.add_middleware(
 
 
 # ---------------------------------------------------------------------------
+# Attachment text extraction helper
+# ---------------------------------------------------------------------------
+
+async def extract_attachment_text(files: list[UploadFile]) -> str:
+    """
+    Ekstrak teks dari file lampiran (PDF, DOCX, TXT).
+    Truncate: 5.000 char per file, 15.000 char total.
+    """
+    if not files:
+        return ""
+
+    all_texts = []
+    for f in files:
+        if not f or not f.filename:
+            continue
+        try:
+            content = await f.read()
+            fname = f.filename.lower()
+
+            if fname.endswith(".pdf"):
+                text = extract_text_from_pdf(content)
+            elif fname.endswith(".docx"):
+                from docx import Document
+                doc = Document(io.BytesIO(content))
+                text = "\n".join(p.text for p in doc.paragraphs if p.text.strip())
+            elif fname.endswith(".txt"):
+                text = content.decode("utf-8", errors="ignore")
+            else:
+                continue
+
+            text = text.strip()[:5000]
+            if text:
+                all_texts.append(f"[{f.filename}]\n{text}")
+
+        except Exception as e:
+            logger.warning("Gagal ekstrak lampiran '%s': %s", f.filename, e)
+
+    combined = "\n\n---\n\n".join(all_texts)
+    return combined[:15000]
+
+
+# ---------------------------------------------------------------------------
 # Health check
 # ---------------------------------------------------------------------------
 
 @app.get("/api/health")
 async def health_check():
-    """Returns service status and ChromaDB document count."""
-    try:
-        collection = get_or_build_job_collection()
-        doc_count = len(collection.get("metadatas", []))
-        index_ready = doc_count > 0
-    except Exception as e:
-        return {"status": "degraded", "error": str(e), "indexed_docs": 0, "index_ready": False}
-
+    """Returns service status."""
     return {
         "status": "ok",
-        "indexed_docs": doc_count,
-        "index_ready": index_ready,
+        "mode": "realtime",
+        "job_sources": ["Tavily"],
+        "search_backend": "Tavily + FAISS embeddings",
         "llm_provider": "Anthropic" if os.getenv("ANTHROPIC_API_KEY") else "OpenRouter",
         "llm_model": os.getenv("AI_MODEL", os.getenv("GAP_MODEL", "not configured")),
+        "tavily_configured": bool(os.getenv("TAVILY_API_KEY")),
     }
 
 
@@ -95,19 +119,18 @@ async def analyze_career(
     target_role: str = Form(..., description="Posisi yang dituju"),
     user_name: str = Form(default="", description="Nama pengguna"),
     github_url: str = Form(default="", description="URL GitHub (opsional)"),
+    additional_context: str = Form(default="", description="Konteks tambahan: preferensi, minat, tujuan karier"),
+    extra_files: list[UploadFile] = File(default=[], description="File lampiran tambahan: PDF, DOCX, TXT"),
 ):
     """
-    Main endpoint: accepts a PDF CV, runs the LangGraph multi-agent pipeline,
-    and returns the full CareerState as JSON.
+    Main endpoint: menerima CV PDF + konteks, menjalankan LangGraph multi-agent pipeline.
 
     Graph flow:
       coordinator → [profiler ∥ analyst] → gap_analyzer → strategist
     """
-    # Validate file type
     if not cv_file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Hanya file PDF yang diterima.")
 
-    # Read and parse PDF
     pdf_bytes = await cv_file.read()
     if len(pdf_bytes) == 0:
         raise HTTPException(status_code=400, detail="File PDF kosong.")
@@ -118,15 +141,22 @@ async def analyze_career(
         raise HTTPException(status_code=422, detail=str(e))
 
     if not cv_text.strip():
-        raise HTTPException(status_code=422, detail="Tidak dapat mengekstrak teks dari PDF. Pastikan PDF bukan hasil scan.")
+        raise HTTPException(
+            status_code=422,
+            detail="Tidak dapat mengekstrak teks dari PDF. Pastikan PDF bukan hasil scan.",
+        )
 
-    # Build initial state
+    # Ekstrak teks dari file lampiran
+    attachments_text = await extract_attachment_text(extra_files)
+
     initial_state = {
         "cv_text": cv_text,
         "cv_filename": cv_file.filename,
         "target_role": target_role.strip(),
         "user_name": user_name.strip(),
         "github_url": github_url.strip(),
+        "additional_context": additional_context.strip(),
+        "attachments_text": attachments_text,
         "user_profile": {},
         "market_data": {},
         "skill_gaps": {},
@@ -136,12 +166,13 @@ async def analyze_career(
         "status": "Memulai...",
     }
 
-    # Import here to avoid circular imports at module load time
     from graph import career_graph
 
-    logger.info(f"Starting analysis for '{target_role}' — CV: {cv_file.filename}")
+    logger.info(
+        "Mulai analisis '%s' — CV: %s | konteks: %d chars | lampiran: %d chars",
+        target_role, cv_file.filename, len(additional_context), len(attachments_text),
+    )
 
-    # Run LangGraph pipeline asynchronously
     loop = asyncio.get_event_loop()
     try:
         final_state = await loop.run_in_executor(
@@ -149,23 +180,25 @@ async def analyze_career(
             lambda: career_graph.invoke(initial_state),
         )
     except Exception as e:
-        logger.error(f"Graph execution error: {e}")
+        logger.error("Graph execution error: %s", e)
         raise HTTPException(status_code=500, detail=f"Terjadi kesalahan sistem: {str(e)}")
 
-    # Check for agent errors
     if final_state.get("error"):
-        logger.warning(f"Graph completed with error: {final_state['error']}")
+        logger.warning("Graph selesai dengan error: %s", final_state["error"])
 
-    # Remove raw cv_text from response (large, not needed by UI)
     response = dict(final_state)
     response.pop("cv_text", None)
+    response.pop("attachments_text", None)  # jangan kirim ke UI (bisa besar)
 
-    logger.info(f"Analysis complete — match: {final_state.get('skill_gaps', {}).get('persentase_kecocokan', 'N/A')}%")
+    logger.info(
+        "Analisis selesai — match: %s%%",
+        final_state.get("skill_gaps", {}).get("persentase_kecocokan", "N/A"),
+    )
     return response
 
 
 # ---------------------------------------------------------------------------
-# Job search endpoint (no LLM — just ChromaDB)
+# Job search endpoint (Tavily — no LLM)
 # ---------------------------------------------------------------------------
 
 class JobSearchRequest(BaseModel):
@@ -178,52 +211,25 @@ class JobSearchRequest(BaseModel):
 @app.post("/api/search-jobs")
 async def search_jobs(request: JobSearchRequest):
     """
-    Fast semantic job search using ChromaDB + SBERT.
-    Does NOT invoke any LLM — returns results in ~100ms after warmup.
+    Pencarian lowongan real-time via Tavily.
+    Returns hasil dari LinkedIn/JobStreet/Glints dalam ~2-5 detik.
     """
     if not request.query.strip():
         raise HTTPException(status_code=400, detail="Query tidak boleh kosong.")
 
     try:
-        collection = get_or_build_job_collection()
-        model = get_sbert_model()
+        from tools.tavily_search import search_jobs_tavily
 
         loop = asyncio.get_event_loop()
         results = await loop.run_in_executor(
             None,
-            lambda: search_similar_jobs(
-                collection,
+            lambda: search_jobs_tavily(
                 request.query,
-                model=model,
-                n_results=min(request.limit, 50),
-                filter_city=request.filter_city,
-                filter_industry=request.filter_industry,
+                location="Indonesia",
+                num_results=min(request.limit, 20),
             ),
         )
-
         return {"results": results, "total": len(results)}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-# ---------------------------------------------------------------------------
-# Individual job detail endpoint
-# ---------------------------------------------------------------------------
-
-@app.get("/api/job/{job_id}")
-async def get_job(job_id: str):
-    """Returns full metadata for a specific job by ID."""
-    try:
-        collection = get_or_build_job_collection()
-        result = collection.get(ids=[f"job_{job_id}"], include=["metadatas", "documents"])
-        if not result["metadatas"]:
-            raise HTTPException(status_code=404, detail=f"Lowongan dengan ID '{job_id}' tidak ditemukan.")
-        return {
-            "metadata": result["metadatas"][0],
-            "description": result["documents"][0],
-        }
-    except HTTPException:
-        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

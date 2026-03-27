@@ -14,6 +14,9 @@ class CareerState(TypedDict):
     target_role: str
     user_name: str
     github_url: str
+    # Konteks tambahan dari pengguna (textarea UI + file lampiran)
+    additional_context: str   # Preferensi, minat, pertanyaan dari pengguna
+    attachments_text: str     # Teks terekstrak dari file lampiran (PDF/DOCX/TXT)
 
     # --- Agent outputs ---
     user_profile: dict      # From Profiler
