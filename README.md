@@ -375,6 +375,32 @@ curl -X POST http://localhost:8000/api/search-jobs \
   -d '{"query": "data scientist Jakarta", "limit": 5}'
 ```
 
+### Langkah 8 — Mematikan Services
+
+**Cara normal** — tekan `Ctrl+C` di masing-masing terminal:
+- Terminal 1 (backend): `Ctrl+C`
+- Terminal 2 (frontend): `Ctrl+C`
+
+**Force kill semua sekaligus** (jika terminal tidak responsif):
+
+**Windows:**
+```bash
+taskkill /F /IM python.exe
+```
+
+**Mac / Linux:**
+```bash
+pkill -f "uvicorn|streamlit"
+```
+
+**Verifikasi sudah berhenti:**
+```bash
+curl http://localhost:8000/api/health   # → connection refused = berhasil stop
+curl http://localhost:8501              # → connection refused = berhasil stop
+```
+
+---
+
 ### Ringkasan Perintah Terminal
 
 | Langkah | Perintah | Terminal |
@@ -383,11 +409,15 @@ curl -X POST http://localhost:8000/api/search-jobs \
 | Aktifkan venv | `venv\Scripts\activate` (Win) / `source venv/bin/activate` (Mac) | Mana saja |
 | Install packages | `pip install -r requirements.txt` | Mana saja |
 | Salin `.env` | `copy .env.example .env` (Win) | Mana saja |
-| Isi API keys | Edit `.env`: TAVILY_API_KEY + ANTHROPIC_API_KEY / OPENAI_API_KEY | Editor teks |
+| Isi API keys | Edit `.env`: `TAVILY_API_KEY` + `OPENAI_API_KEY` (OpenRouter) | Editor teks |
 | Jalankan backend | `uvicorn main:app --reload --port 8000` | Terminal 1 |
 | Jalankan frontend | `streamlit run app.py` | Terminal 2 |
 | Cek health | `curl http://localhost:8000/api/health` | Terminal mana saja |
 | Buka UI | Buka browser → `http://localhost:8501` | Browser |
+| **Stop backend** | `Ctrl+C` | Terminal 1 |
+| **Stop frontend** | `Ctrl+C` | Terminal 2 |
+| **Force kill semua (Windows)** | `taskkill /F /IM python.exe` | Terminal mana saja |
+| **Force kill semua (Mac/Linux)** | `pkill -f "uvicorn\|streamlit"` | Terminal mana saja |
 
 ---
 
