@@ -165,13 +165,13 @@ Field `messages`, `error`, dan `status` menggunakan **reducer** agar kedua agent
 | **LLM Framework** | LangChain 0.2+ | Abstraksi model, prompt management |
 | **LLM Primary** | Claude Haiku/Sonnet (Anthropic) | Jika `ANTHROPIC_API_KEY` diset |
 | **LLM Fallback** | x-ai/grok-4-fast (OpenRouter) | Jika hanya `OPENAI_API_KEY` yang diset |
-| **Vector Search** | TF-IDF + Cosine Similarity (sklearn) | Pencarian lowongan dari 4.000+ data, tanpa download model |
-| **Job Search Live** | DuckDuckGo (ddgs) | Gratis, tanpa API key, targeting Indonesia |
+| **Job Search Real-Time** | LinkedIn via DuckDuckGo (ddgs) | Lowongan langsung dari LinkedIn, JobStreet, Glints — tanpa API key |
+| **Bootcamp Info** | DuckDuckGo (ddgs) | Informasi Dicoding, Bangkit, Hacktiv8, Binar, RevoU — real-time |
+| **Salary Data** | DuckDuckGo + gajimu.com | Range gaji IDR dari pencarian real-time |
 | **PDF Parser** | PyMuPDF (fitz) | Ekstrak teks dari CV PDF |
 | **Backend API** | FastAPI + Uvicorn | Async, endpoint `/api/analyze` |
 | **Frontend** | Streamlit | UI dalam Bahasa Indonesia |
 | **Visualisasi** | Plotly | Radar chart skill gap |
-| **Dataset** | `dataset/Filtered_Jobs_4000.csv` | 4.000+ lowongan kerja Indonesia |
 
 ### Struktur Folder
 
@@ -195,60 +195,157 @@ d:/multi-agent-career-indo-recomendation/
 │
 ├── tools/
 │   ├── cv_parser.py            # PDF → teks, GitHub scraper
-│   ├── vector_store.py         # TF-IDF index (sklearn + pickle)
-│   └── job_scraper.py          # DuckDuckGo: lowongan, gaji, tren
-│
-└── dataset/
-    ├── Filtered_Jobs_4000.csv  # Dataset lowongan utama
-    └── Occupation Data.csv     # Data O*NET occupational codes
+│   ├── vector_store.py         # Real-time job search (LinkedIn, JobStreet, Glints, bootcamp)
+│   └── job_scraper.py          # DuckDuckGo: gaji IDR, tren pertumbuhan, perusahaan hiring
 ```
 
 ---
 
 ## Cara Menjalankan
 
-### 1. Persiapan
+> Sistem ini menggunakan data **real-time** dari LinkedIn, JobStreet, dan Glints — tidak ada dataset lokal yang perlu di-download. Pastikan komputer terhubung ke internet saat menjalankan analisis.
+
+### Langkah 1 — Clone Repository
 
 ```bash
-# Install dependencies
-pip install -r requirements.txt
+git clone https://github.com/adinplb/job-recommender-benchmark.git
+cd job-recommender-benchmark
+git checkout feature/multi-agent-langgraph
+```
 
-# Salin dan isi file .env
+### Langkah 2 — Buat Virtual Environment (Opsional tapi Direkomendasikan)
+
+**Windows:**
+```bash
+python -m venv venv
+venv\Scripts\activate
+```
+
+**Mac / Linux:**
+```bash
+python -m venv venv
+source venv/bin/activate
+```
+
+### Langkah 3 — Install Dependencies
+
+```bash
+pip install -r requirements.txt
+```
+
+Verifikasi instalasi paket kunci:
+```bash
+pip show langgraph langchain-anthropic langchain-openai fastapi streamlit pymupdf ddgs
+```
+
+### Langkah 4 — Konfigurasi API Key
+
+Salin template dan isi API key:
+
+```bash
+# Windows
+copy .env.example .env
+
+# Mac / Linux
 cp .env.example .env
 ```
 
-Isi `.env` minimal:
+Buka `.env` dengan editor teks dan isi salah satu provider LLM:
+
 ```env
-# Pilih salah satu provider LLM:
+# ── Pilih salah satu provider LLM ──────────────────────────────
 
-# Opsi A: Anthropic (direkomendasikan jika punya kredit)
-ANTHROPIC_API_KEY=sk-ant-...
+# Opsi A: Anthropic (direkomendasikan — Haiku untuk paralel, Sonnet untuk sequential)
+ANTHROPIC_API_KEY=sk-ant-xxxxxxxxxxxxxxxx
 
-# Opsi B: OpenRouter (fallback gratis)
-OPENAI_API_KEY=sk-or-v1-...
+# Opsi B: OpenRouter (alternatif, satu model untuk semua agent)
+OPENAI_API_KEY=sk-or-v1-xxxxxxxxxxxxxxxx
 OPENAI_BASE_URL=https://openrouter.ai/api/v1
 AI_MODEL=x-ai/grok-4-fast
+
+# ── Parameter LLM (opsional, sudah ada default) ─────────────────
+AI_MAX_TOKENS=1200
+AI_TEMPERATURE=0.35
+AI_RECOMMENDATION_TEMPERATURE=0.3
 ```
 
-### 2. Jalankan Backend
+> **Catatan:** Jika kedua key diisi, sistem otomatis pakai Anthropic (primary) dan OpenRouter sebagai fallback.
+
+### Langkah 5 — Jalankan FastAPI Backend
+
+Buka **Terminal 1**:
 
 ```bash
 uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-Cek status:
-```bash
-curl http://localhost:8000/api/health
-# {"status":"ok","indexed_docs":4000,"index_ready":true,...}
+Output yang diharapkan:
+```
+INFO:     Indo-Career AI starting up — mode real-time (LinkedIn + job boards).
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
 ```
 
-### 3. Jalankan Frontend
+Verifikasi backend berjalan:
+```bash
+curl http://localhost:8000/api/health
+```
+```json
+{
+  "status": "ok",
+  "mode": "realtime",
+  "job_sources": ["LinkedIn", "JobStreet", "Glints"],
+  "llm_provider": "OpenRouter",
+  "llm_model": "x-ai/grok-4-fast"
+}
+```
+
+### Langkah 6 — Jalankan Streamlit Frontend
+
+Buka **Terminal 2** (terminal baru, jangan tutup Terminal 1):
 
 ```bash
 streamlit run app.py
 ```
 
-Buka `http://localhost:8501` di browser.
+Output yang diharapkan:
+```
+  You can now view your Streamlit app in your browser.
+  Local URL: http://localhost:8501
+  Network URL: http://192.168.x.x:8501
+```
+
+Buka browser dan akses: **`http://localhost:8501`**
+
+### Langkah 7 — Uji Pipeline Lengkap via Terminal (Opsional)
+
+Tanpa membuka browser, uji end-to-end via `curl`:
+
+```bash
+curl -X POST http://localhost:8000/api/analyze \
+  -F "cv_file=@cv_saya.pdf" \
+  -F "target_role=Backend Engineer" \
+  -F "user_name=Budi Santoso"
+```
+
+Atau uji pencarian lowongan LinkedIn real-time:
+```bash
+curl -X POST http://localhost:8000/api/search-jobs \
+  -H "Content-Type: application/json" \
+  -d '{"query": "data scientist Jakarta", "limit": 5}'
+```
+
+### Ringkasan Perintah Terminal
+
+| Langkah | Perintah | Terminal |
+|---|---|---|
+| Clone & masuk folder | `git clone ... && cd ...` | Mana saja |
+| Aktifkan venv | `venv\Scripts\activate` (Win) / `source venv/bin/activate` (Mac) | Mana saja |
+| Install packages | `pip install -r requirements.txt` | Mana saja |
+| Jalankan backend | `uvicorn main:app --reload --port 8000` | Terminal 1 |
+| Jalankan frontend | `streamlit run app.py` | Terminal 2 |
+| Cek health | `curl http://localhost:8000/api/health` | Terminal mana saja |
+| Buka UI | Buka browser → `http://localhost:8501` | Browser |
 
 ---
 
@@ -315,15 +412,15 @@ Jika Profiler selalu selesai **sebelum** Analyst mulai, paralel tidak berjalan.
 
 ---
 
-### Skenario 5: Pencarian Lowongan (Tanpa LLM)
+### Skenario 5: Pencarian Lowongan Real-Time (Tanpa LLM)
 
 ```bash
 curl -X POST http://localhost:8000/api/search-jobs \
   -H "Content-Type: application/json" \
-  -d '{"query": "data scientist machine learning", "limit": 5}'
+  -d '{"query": "data scientist machine learning Jakarta", "limit": 5}'
 ```
 
-**Ekspektasi:** Respons dalam <200ms setelah warmup, `total` > 0.
+**Ekspektasi:** Respons berisi lowongan dari LinkedIn/JobStreet/Glints, `total` > 0. Waktu respons ~2-5 detik (karena pencarian real-time ke internet).
 
 ---
 

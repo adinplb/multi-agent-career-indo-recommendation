@@ -28,21 +28,10 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
-    Warm up ChromaDB on startup (runs index build once, then fast path on reload).
-    Uses run_in_executor to avoid blocking the async event loop during SBERT encoding.
+    Startup: mode real-time aktif — tidak ada dataset lokal yang di-load.
+    Lowongan diambil langsung dari LinkedIn, JobStreet, Glints saat query.
     """
-    logger.info("Indo-Career AI starting up — warming ChromaDB index...")
-    loop = asyncio.get_event_loop()
-    try:
-        await loop.run_in_executor(
-            None,
-            get_or_build_job_collection,
-            os.getenv("DATASET_PATH", "dataset/Filtered_Jobs_4000.csv"),
-            os.getenv("ONET_PATH", "dataset/Occupation Data.csv"),
-        )
-        logger.info("ChromaDB ready.")
-    except Exception as e:
-        logger.warning(f"ChromaDB warmup failed (non-fatal): {e}")
+    logger.info("Indo-Career AI starting up — mode real-time (LinkedIn + job boards).")
     yield
     logger.info("Indo-Career AI shutting down.")
 
@@ -68,18 +57,11 @@ app.add_middleware(
 
 @app.get("/api/health")
 async def health_check():
-    """Returns service status and ChromaDB document count."""
-    try:
-        collection = get_or_build_job_collection()
-        doc_count = len(collection.get("metadatas", []))
-        index_ready = doc_count > 0
-    except Exception as e:
-        return {"status": "degraded", "error": str(e), "indexed_docs": 0, "index_ready": False}
-
+    """Returns service status. Mode real-time: lowongan diambil langsung dari LinkedIn."""
     return {
         "status": "ok",
-        "indexed_docs": doc_count,
-        "index_ready": index_ready,
+        "mode": "realtime",
+        "job_sources": ["LinkedIn", "JobStreet", "Glints"],
         "llm_provider": "Anthropic" if os.getenv("ANTHROPIC_API_KEY") else "OpenRouter",
         "llm_model": os.getenv("AI_MODEL", os.getenv("GAP_MODEL", "not configured")),
     }
