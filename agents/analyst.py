@@ -1,19 +1,20 @@
 """
 Market Analyst Agent
-Scans the local job database (ChromaDB) and live market (DuckDuckGo) for the target role.
-Synthesizes salary, growth trends, and top matching jobs via LLM.
+Mencari lowongan real-time (Tavily) dan mensintesis data pasar Indonesia via LLM.
 
 Model: claude-haiku-4-5-20251001 (Anthropic) — fastest + cheapest Claude.
 Runs in PARALLEL with Profiler → speed & cost optimized.
 Cost: $1/MTok input, $5/MTok output. Data aggregation task — Haiku is sufficient.
+
+Tavily credits per run: 4 (jobs + bootcamp + salary + trends).
 """
-import os
 import json
 import logging
 from langchain_core.messages import SystemMessage, HumanMessage
 from state import CareerState
-from tools.vector_store import search_similar_jobs, search_linkedin_jobs, search_bootcamp_info, get_or_build_job_collection, get_sbert_model
-from tools.job_scraper import search_jobs, search_salary_trends, search_growth_trends, search_indonesian_companies_hiring
+from tools.vector_store import search_similar_jobs, get_or_build_job_collection, get_sbert_model
+from tools.tavily_search import search_bootcamp_tavily, extract_companies_from_jobs
+from tools.job_scraper import search_salary_trends, search_growth_trends
 from agents.llm_factory import get_fast_llm
 
 logger = logging.getLogger(__name__)
@@ -67,43 +68,27 @@ def analyst_node(state: CareerState) -> dict:
 
         logger.info(f"Market Analyst: menganalisis pasar untuk '{target_role}'...")
 
-        # 1. Cari lowongan real-time dari LinkedIn (sumber utama)
-        linkedin_jobs = search_linkedin_jobs(target_role, location="Indonesia", num_results=8)
+        # 1. Cari lowongan real-time via Tavily (LinkedIn + JobStreet + Glints) — 1 credit
+        collection = get_or_build_job_collection()
+        top_local_jobs = search_similar_jobs(collection, target_role, n_results=8)
 
-        # 2. Jika hasil LinkedIn kurang, tambah dari DuckDuckGo job boards
-        if len(linkedin_jobs) < 5:
-            ddg_query = f"lowongan kerja {target_role} Indonesia Jakarta 2025"
-            extra_jobs = search_jobs(ddg_query, num_results=5)
-        else:
-            extra_jobs = []
+        # 2. Bootcamp dan program belajar Indonesia — 1 credit
+        bootcamp_results = search_bootcamp_tavily(target_role, num_results=4)
 
-        top_local_jobs = linkedin_jobs[:8]
-
-        # 3. Informasi bootcamp dan program belajar relevan
-        bootcamp_results = search_bootcamp_info(target_role, num_results=4)
-
-        # 4. Live job search DuckDuckGo untuk snippet pasar
-        live_query = f"lowongan kerja {target_role} Indonesia Jakarta 2025"
-        live_jobs = search_jobs(live_query, num_results=5)
-
-        # 5. Find Indonesian companies hiring for this role
-        indo_companies = search_indonesian_companies_hiring(target_role)
-
-        # 4. Salary trends
+        # 3. Data gaji Indonesia — 1 credit
         salary_data = search_salary_trends(target_role)
 
-        # 5. Growth trends
+        # 4. Tren pertumbuhan demand — 1 credit
         growth_data = search_growth_trends(target_role)
 
-        # 6. Build context for LLM synthesis
-        linkedin_summary = "\n".join([
-            f"- {j['title']} di {j['company']} ({j['city']}) — {j['snippet'][:120]}"
-            for j in top_local_jobs[:5]
-        ])
+        # Ekstrak perusahaan dari job snippets (0 credits tambahan)
+        indo_companies = extract_companies_from_jobs(top_local_jobs)
 
-        live_jobs_summary = "\n".join([
-            f"- {j['title']}: {j['snippet'][:150]}"
-            for j in live_jobs[:5]
+        # Build context for LLM synthesis
+        jobs_summary = "\n".join([
+            f"- {j.get('title','?')} di {j.get('company','?')} ({j.get('city','?')}) "
+            f"[{j.get('source','?')}] — {j.get('snippet','')[:120]}"
+            for j in top_local_jobs[:5]
         ])
 
         bootcamp_summary = "\n".join([
@@ -113,11 +98,8 @@ def analyst_node(state: CareerState) -> dict:
 
         context = f"""Target Role: {target_role}
 
-DATA LOWONGAN REAL-TIME (dari LinkedIn Indonesia):
-{linkedin_summary or "Tidak ada data lowongan LinkedIn."}
-
-DATA LOWONGAN TERKINI (dari pencarian DuckDuckGo job boards):
-{live_jobs_summary or "Tidak ada data lowongan terkini."}
+DATA LOWONGAN REAL-TIME (dari Tavily — LinkedIn, JobStreet, Glints):
+{jobs_summary or "Tidak ada data lowongan terkini."}
 
 INFORMASI BOOTCAMP & PROGRAM BELAJAR RELEVAN (Indonesia):
 {bootcamp_summary or "Dicoding, Bangkit, Hacktiv8, Binar Academy, RevoU, Digitalent Kominfo"}

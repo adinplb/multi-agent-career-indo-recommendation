@@ -1,6 +1,7 @@
 """
 Indo-Career AI — Streamlit Frontend
 UI in Bahasa Indonesia. Communicates with FastAPI backend via httpx.
+Data real-time dari Tavily (LinkedIn, JobStreet, Glints) + FAISS embeddings.
 """
 import os
 import json
@@ -38,13 +39,24 @@ def format_idr(amount) -> str:
         return "N/A"
 
 
-def call_api_analyze(user_name, target_role, cv_file, github_url) -> dict:
-    """Posts CV to FastAPI /api/analyze and returns the full CareerState."""
-    files = {"cv_file": (cv_file.name, cv_file.getvalue(), "application/pdf")}
+def call_api_analyze(
+    user_name, target_role, cv_file, github_url,
+    additional_context="", extra_files=None,
+) -> dict:
+    """Posts CV + konteks ke FastAPI /api/analyze dan mengembalikan CareerState."""
+    files = [("cv_file", (cv_file.name, cv_file.getvalue(), "application/pdf"))]
+
+    # Tambah file lampiran jika ada
+    if extra_files:
+        for ef in extra_files:
+            mime = ef.type or "application/octet-stream"
+            files.append(("extra_files", (ef.name, ef.getvalue(), mime)))
+
     data = {
         "target_role": target_role,
         "user_name": user_name,
         "github_url": github_url or "",
+        "additional_context": additional_context or "",
     }
     try:
         with httpx.Client(timeout=300.0) as client:
@@ -70,13 +82,11 @@ def call_api_analyze(user_name, target_role, cv_file, github_url) -> dict:
         return {}
 
 
-def call_api_search(query, limit=10, filter_city=None, filter_industry=None) -> list:
-    """Calls /api/search-jobs for quick semantic job search."""
+def call_api_search(query, limit=10, filter_city=None) -> list:
+    """Calls /api/search-jobs untuk pencarian lowongan real-time via Tavily."""
     payload = {"query": query, "limit": limit}
     if filter_city:
         payload["filter_city"] = filter_city
-    if filter_industry:
-        payload["filter_industry"] = filter_industry
     try:
         with httpx.Client(timeout=30.0) as client:
             resp = client.post(f"{API_BASE_URL}/api/search-jobs", json=payload)
@@ -91,7 +101,7 @@ def create_gap_radar_chart(skill_gaps: dict) -> go.Figure:
     """Creates a Plotly radar chart comparing user skills vs market demand."""
     owned = skill_gaps.get("keahlian_dimiliki", [])[:8]
     missing = skill_gaps.get("keahlian_kurang", [])[:8]
-    all_skills = list(dict.fromkeys(owned + missing))  # preserve order, deduplicate
+    all_skills = list(dict.fromkeys(owned + missing))
 
     if not all_skills:
         fig = go.Figure()
@@ -100,7 +110,7 @@ def create_gap_radar_chart(skill_gaps: dict) -> go.Figure:
 
     owned_set = set(s.lower() for s in owned)
     user_values = [1 if s.lower() in owned_set else 0 for s in all_skills]
-    market_values = [1] * len(all_skills)  # all are demanded
+    market_values = [1] * len(all_skills)
 
     fig = go.Figure()
     fig.add_trace(go.Scatterpolar(
@@ -175,7 +185,9 @@ with st.sidebar:
     try:
         with httpx.Client(timeout=3.0) as client:
             health = client.get(f"{API_BASE_URL}/api/health").json()
-        st.success(f"Server aktif ({health.get('chromadb_docs', 0):,} lowongan)")
+        tavily_ok = health.get("tavily_configured", False)
+        status_text = "Server aktif" + (" ✓ Tavily" if tavily_ok else " ⚠️ Tavily belum dikonfigurasi")
+        st.success(status_text)
     except Exception:
         st.warning("Server tidak aktif. Jalankan: `uvicorn main:app --reload`")
 
@@ -194,9 +206,9 @@ if halaman == "🏠 Beranda":
 
     col1, col2, col3 = st.columns(3)
     with col1:
-        st.info("**🔍 Profiler**\nMenganalisis CV Anda dan mengekstrak keahlian tersembunyi berdasarkan standar SKKNI")
+        st.info("**🔍 Profiler**\nMenganalisis CV dan mengekstrak keahlian tersembunyi berdasarkan standar SKKNI")
     with col2:
-        st.info("**📊 Market Analyst**\nMemindai 4.000+ lowongan kerja Indonesia dan tren pasar terkini secara real-time")
+        st.info("**📊 Market Analyst**\nMencari lowongan real-time dari LinkedIn, JobStreet, Glints via Tavily AI")
     with col3:
         st.info("**🗺️ Strategist**\nMembuat peta jalan karier 6 bulan dengan rekomendasi lokal (BNSP, Dicoding, Bangkit)")
 
@@ -206,14 +218,16 @@ if halaman == "🏠 Beranda":
 
     1. **Upload CV** — Unggah file PDF CV Anda di halaman *Analisis Karier*
     2. **Tentukan Target** — Masukkan posisi yang ingin Anda raih
-    3. **Tunggu Analisis** — AI bekerja secara paralel (~30-60 detik)
-    4. **Lihat Hasil** — Dapatkan analisis gap keahlian dan peta jalan 6 bulan
+    3. **Tambah Konteks** — Ceritakan preferensi dan tujuan karier Anda (opsional)
+    4. **Lampirkan Dokumen** — Upload sertifikat, transkrip, atau portofolio (opsional)
+    5. **Tunggu Analisis** — AI bekerja secara paralel (~30-60 detik)
+    6. **Lihat Hasil** — Dapatkan analisis gap keahlian dan peta jalan 6 bulan
 
     ### Didukung oleh
     - **LangGraph** (Fan-Out/Fan-In parallelism)
-    - **Claude 3.5 Sonnet / GPT-4o** via OpenRouter
-    - **SBERT** + **ChromaDB** (4.000+ data lowongan Indonesia)
-    - **Serper.dev** (pencarian lowongan real-time)
+    - **Tavily AI** (pencarian lowongan real-time dari LinkedIn, JobStreet, Glints)
+    - **FAISS + OpenAI Embeddings** (pencocokan semantik lowongan)
+    - **Claude Haiku/Sonnet** via Anthropic atau OpenRouter
     """)
 
 
@@ -223,7 +237,7 @@ if halaman == "🏠 Beranda":
 
 elif halaman == "🔍 Analisis Karier":
     st.title("Analisis Karier")
-    st.markdown("Upload CV Anda dan masukkan posisi yang dituju untuk mendapatkan analisis mendalam.")
+    st.markdown("Upload CV dan masukkan posisi yang dituju untuk mendapatkan analisis mendalam berbasis data real-time.")
 
     # Input form
     with st.form("form_analisis", clear_on_submit=False):
@@ -245,6 +259,28 @@ elif halaman == "🔍 Analisis Karier":
                 help="Maksimal 10MB. Pastikan CV berupa teks (bukan gambar/scan).",
             )
 
+        st.divider()
+        st.markdown("#### 💬 Konteks Tambahan (Opsional)")
+        st.caption("Informasi ini membantu AI mempersonalisasi roadmap dan analisis untuk Anda.")
+
+        additional_context = st.text_area(
+            "Ceritakan preferensi dan tujuan karier Anda",
+            placeholder=(
+                "Contoh: Saya ingin pindah dari Backend ke ML Engineering. "
+                "Saya prefer remote work dan tertarik startup tahap awal. "
+                "Punya waktu belajar 2 jam per hari. "
+                "Tertarik dengan perusahaan yang bergerak di bidang fintech atau edtech..."
+            ),
+            height=120,
+        )
+
+        extra_files = st.file_uploader(
+            "Lampiran Tambahan (opsional)",
+            type=["pdf", "docx", "txt"],
+            accept_multiple_files=True,
+            help="Upload transkrip nilai, sertifikat, portofolio, atau dokumen pendukung lainnya. Format: PDF, DOCX, TXT.",
+        )
+
         tombol = st.form_submit_button("🚀 Mulai Analisis", use_container_width=True, type="primary")
 
     if tombol:
@@ -253,17 +289,24 @@ elif halaman == "🔍 Analisis Karier":
         elif not target_peran.strip():
             st.error("Silakan masukkan posisi yang dituju.")
         else:
-            # Show analysis progress
             with st.status("Menganalisis profil Anda...", expanded=True) as status_bar:
                 st.write("📄 Membaca dan mengekstrak teks dari CV...")
+                if extra_files:
+                    st.write(f"📎 Memproses {len(extra_files)} file lampiran...")
+                if additional_context:
+                    st.write("💬 Konteks tambahan diterima — akan dipersonalisasi...")
                 st.write("🔄 Memulai analisis paralel:")
                 st.write("　　🧑‍💼 Profiler: mengekstrak keahlian dan SKKNI...")
-                st.write("　　📊 Market Analyst: memindai lowongan Indonesia...")
+                st.write("　　📊 Market Analyst: mencari lowongan real-time (Tavily)...")
                 st.write("*(Kedua agen di atas berjalan BERSAMAAN)*")
                 st.write("⏳ Gap Analyzer: menghitung kesenjangan keahlian...")
-                st.write("🗺️ Strategist: menyusun peta jalan 6 bulan...")
+                st.write("🗺️ Strategist: menyusun peta jalan 6 bulan yang dipersonalisasi...")
 
-                result = call_api_analyze(nama_pengguna, target_peran, cv_file, github_url)
+                result = call_api_analyze(
+                    nama_pengguna, target_peran, cv_file, github_url,
+                    additional_context=additional_context,
+                    extra_files=extra_files if extra_files else None,
+                )
 
                 if result and not result.get("error"):
                     status_bar.update(label="Analisis selesai!", state="complete", expanded=False)
@@ -414,25 +457,37 @@ elif halaman == "🔍 Analisis Karier":
                     fig_bar.update_layout(showlegend=False, height=300)
                     st.plotly_chart(fig_bar, use_container_width=True)
 
-            # Local job matches
+            # Real-time job results
             pekerjaan_lokal = market_data.get("pekerjaan_lokal", [])
             if pekerjaan_lokal:
                 st.divider()
-                st.markdown("**Lowongan Terkait dari Database (4.000+ lowongan):**")
+                st.markdown("**Lowongan Real-Time (Tavily — LinkedIn, JobStreet, Glints):**")
                 for job in pekerjaan_lokal:
-                    with st.expander(
-                        f"{'%.0f' % (job.get('match_score', 0) * 100)}% cocok — "
+                    score_pct = int(job.get("match_score", 0) * 100)
+                    label = (
+                        f"{score_pct}% cocok — "
                         f"{job.get('title', 'N/A')} @ {job.get('company', 'N/A')}"
-                    ):
-                        c1, c2 = st.columns(2)
-                        with c1:
-                            st.markdown(f"**Posisi:** {job.get('position', 'N/A')}")
-                            st.markdown(f"**Kota:** {job.get('city', 'N/A')}")
-                            st.markdown(f"**Industri:** {job.get('industry', 'N/A')}")
-                        with c2:
-                            st.markdown(f"**Gaji:** {job.get('salary', 'Tidak disebutkan')}")
-                            st.markdown(f"**Tipe:** {job.get('employment_type', 'N/A')}")
-                            st.markdown(f"**Pendidikan:** {job.get('education_required', 'N/A')}")
+                        f" [{job.get('source', '')}]"
+                    )
+                    with st.expander(label):
+                        st.markdown(f"**Kota:** {job.get('city', 'N/A')}")
+                        st.markdown(f"**Sumber:** {job.get('source', 'N/A')}")
+                        if job.get("snippet"):
+                            st.markdown(f"**Deskripsi:** {job['snippet'][:300]}")
+                        if job.get("link"):
+                            st.link_button("🔗 Lihat Lowongan", job["link"])
+
+            # Bootcamp info
+            bootcamp_info = market_data.get("bootcamp_info", [])
+            if bootcamp_info:
+                st.divider()
+                st.markdown("**Program Belajar & Bootcamp Relevan:**")
+                for b in bootcamp_info:
+                    with st.expander(f"🎓 {b.get('platform', 'Platform')} — {b.get('title', '')[:60]}"):
+                        if b.get("snippet"):
+                            st.markdown(b["snippet"][:200])
+                        if b.get("link"):
+                            st.link_button("🔗 Kunjungi", b["link"])
 
         with tab4:
             if roadmap:
@@ -462,18 +517,21 @@ elif halaman == "🔍 Analisis Karier":
 
 elif halaman == "💼 Cari Lowongan":
     st.title("Cari Lowongan Kerja")
-    st.markdown("Cari lowongan dari database 4.000+ lowongan menggunakan pencarian semantik berbasis AI.")
+    st.markdown("Pencarian lowongan **real-time** dari LinkedIn, JobStreet, dan Glints via Tavily AI.")
 
     col_s1, col_s2, col_s3 = st.columns([3, 1, 1])
     with col_s1:
-        query = st.text_input("Cari posisi, keahlian, atau industri", placeholder="contoh: data scientist machine learning Jakarta")
+        query = st.text_input(
+            "Cari posisi, keahlian, atau industri",
+            placeholder="contoh: data scientist machine learning Jakarta",
+        )
     with col_s2:
         filter_city = st.text_input("Filter Kota", placeholder="contoh: Jakarta")
     with col_s3:
-        limit = st.number_input("Jumlah Hasil", min_value=5, max_value=50, value=15)
+        limit = st.number_input("Jumlah Hasil", min_value=3, max_value=20, value=8)
 
     if st.button("🔍 Cari", type="primary") and query.strip():
-        with st.spinner("Mencari lowongan..."):
+        with st.spinner("Mencari lowongan real-time..."):
             results = call_api_search(
                 query=query,
                 limit=int(limit),
@@ -482,29 +540,30 @@ elif halaman == "💼 Cari Lowongan":
 
         if results:
             st.success(f"Ditemukan {len(results)} lowongan relevan")
+            st.divider()
 
-            # Build dataframe for display
-            df = pd.DataFrame(results)
-            display_cols = ["title", "company", "city", "industry", "salary", "employment_type"]
-            display_cols = [c for c in display_cols if c in df.columns]
-            df_display = df[display_cols].copy()
-            df_display.columns = ["Posisi", "Perusahaan", "Kota", "Industri", "Gaji", "Tipe"][:len(display_cols)]
+            for job in results:
+                score_pct = int(job.get("match_score", 0) * 100)
+                source = job.get("source", "")
+                company = job.get("company", "")
+                title = job.get("title", "N/A")
 
-            st.dataframe(df_display, use_container_width=True, hide_index=True)
+                header = f"**{title}**"
+                if company:
+                    header += f" — {company}"
+                if source:
+                    header += f" `[{source}]`"
 
-            # Expandable detail cards
-            st.markdown("---")
-            for job in results[:10]:
-                with st.expander(f"{job.get('title', 'N/A')} — {job.get('company', 'N/A')} ({job.get('city', 'N/A')})"):
-                    c1, c2 = st.columns(2)
-                    with c1:
-                        st.markdown(f"**Industri:** {job.get('industry', 'N/A')}")
-                        st.markdown(f"**Gaji:** {job.get('salary', 'Tidak disebutkan')}")
-                    with c2:
-                        st.markdown(f"**Tipe Pekerjaan:** {job.get('employment_type', 'N/A')}")
-                        st.markdown(f"**Pendidikan:** {job.get('education_required', 'N/A')}")
-                    if job.get("document"):
-                        st.markdown(f"**Deskripsi:** {job['document'][:300]}...")
+                with st.expander(f"{score_pct}% relevan • {title} {('@ ' + company) if company else ''}"):
+                    col_j1, col_j2 = st.columns([2, 1])
+                    with col_j1:
+                        if job.get("snippet"):
+                            st.markdown(f"{job['snippet'][:300]}")
+                    with col_j2:
+                        st.markdown(f"**Sumber:** {source}")
+                        st.markdown(f"**Kota:** {job.get('city', 'Indonesia')}")
+                        if job.get("link"):
+                            st.link_button("🔗 Lihat Lowongan", job["link"])
         else:
             st.info("Tidak ada hasil ditemukan. Coba kata kunci yang berbeda.")
 
@@ -514,83 +573,112 @@ elif halaman == "💼 Cari Lowongan":
 # ---------------------------------------------------------------------------
 
 elif halaman == "📊 Tren Pasar":
-    st.title("Tren Pasar Kerja Indonesia")
-    st.markdown("Visualisasi data dari database 4.000+ lowongan kerja Indonesia.")
+    st.title("Tren Pasar Kerja Teknologi Indonesia")
+    st.markdown("Data **real-time** dari Tavily Search — diperbarui setiap klik tombol.")
 
-    try:
-        with httpx.Client(timeout=10.0) as client:
-            health = client.get(f"{API_BASE_URL}/api/health").json()
+    ROLE_CATEGORIES = [
+        "Data Scientist / Machine Learning Engineer",
+        "Backend Engineer / Software Engineer",
+        "Frontend Engineer / Mobile Developer",
+        "DevOps / Cloud Engineer",
+        "Product Manager",
+        "UI/UX Designer",
+    ]
 
-        if health.get("chromadb_docs", 0) > 0:
-            # Load the original dataset for visualization
-            dataset_path = os.getenv("DATASET_PATH", "dataset/Filtered_Jobs_4000.csv")
-            if os.path.exists(dataset_path):
-                jobs_df = pd.read_csv(dataset_path).fillna("")
+    # Cache di session_state — hemat Tavily credits
+    if "tren_data" not in st.session_state:
+        st.info("Klik tombol di bawah untuk memuat data tren pasar terkini dari Tavily.")
+        st.caption(f"Data akan diambil untuk {len(ROLE_CATEGORIES)} kategori role (~{len(ROLE_CATEGORIES)*3} Tavily credits).")
+        if st.button("🔄 Muat Data Tren Pasar", type="primary", use_container_width=True):
+            with st.spinner(f"Mengambil data tren real-time untuk {len(ROLE_CATEGORIES)} kategori..."):
+                from tools.tavily_search import search_market_trends_by_category
+                tren_data = search_market_trends_by_category(ROLE_CATEGORIES)
+                st.session_state["tren_data"] = tren_data
+            st.rerun()
+    else:
+        tren_data = st.session_state["tren_data"]
 
-                col_t1, col_t2 = st.columns(2)
+        col_refresh, _ = st.columns([1, 3])
+        with col_refresh:
+            if st.button("🔄 Refresh Data"):
+                del st.session_state["tren_data"]
+                st.rerun()
 
-                with col_t1:
-                    # Industry distribution
-                    industry_counts = jobs_df["Industry"].value_counts().head(15)
-                    fig_ind = px.bar(
-                        x=industry_counts.values,
-                        y=industry_counts.index,
-                        orientation="h",
-                        title="Top 15 Industri Berdasarkan Lowongan",
-                        labels={"x": "Jumlah Lowongan", "y": "Industri"},
-                        color=industry_counts.values,
-                        color_continuous_scale="Blues",
-                    )
-                    fig_ind.update_layout(height=500, showlegend=False)
-                    st.plotly_chart(fig_ind, use_container_width=True)
+        # --- Chart 1: Growth signal per role ---
+        signal_map = {"high": 3, "medium": 2, "low": 1}
+        signal_colors = {"high": "#2ECC71", "medium": "#F39C12", "low": "#E74C3C"}
 
-                with col_t2:
-                    # Employment type distribution
-                    emp_counts = jobs_df["Employment.Type"].value_counts()
-                    fig_emp = px.pie(
-                        values=emp_counts.values,
-                        names=emp_counts.index,
-                        title="Distribusi Tipe Pekerjaan",
-                        color_discrete_sequence=px.colors.qualitative.Set2,
-                    )
-                    fig_emp.update_layout(height=500)
-                    st.plotly_chart(fig_emp, use_container_width=True)
+        roles = list(tren_data.keys())
+        signals = [tren_data[r].get("growth_signal", "medium") for r in roles]
+        signal_vals = [signal_map.get(s, 2) for s in signals]
+        colors = [signal_colors.get(s, "#F39C12") for s in signals]
 
-                # Education required distribution
-                edu_counts = jobs_df["Education.Required"].value_counts().head(10)
-                if not edu_counts.empty:
-                    fig_edu = px.bar(
-                        x=edu_counts.index,
-                        y=edu_counts.values,
-                        title="Persyaratan Pendidikan",
-                        labels={"x": "Pendidikan", "y": "Jumlah Lowongan"},
-                        color=edu_counts.values,
-                        color_continuous_scale="Greens",
-                    )
-                    fig_edu.update_layout(height=350, showlegend=False)
-                    st.plotly_chart(fig_edu, use_container_width=True)
+        fig_growth = go.Figure(go.Bar(
+            x=[r.split("/")[0].strip() for r in roles],
+            y=signal_vals,
+            marker_color=colors,
+            text=signals,
+            textposition="outside",
+        ))
+        fig_growth.update_layout(
+            title="Tingkat Pertumbuhan Demand per Role",
+            yaxis=dict(
+                tickvals=[1, 2, 3],
+                ticktext=["Rendah", "Sedang", "Tinggi"],
+                range=[0, 3.5],
+            ),
+            height=350,
+            showlegend=False,
+        )
+        st.plotly_chart(fig_growth, use_container_width=True)
 
-                # City distribution
-                city_counts = jobs_df["City"].value_counts().head(15)
-                if not city_counts.empty:
-                    fig_city = px.bar(
-                        x=city_counts.index,
-                        y=city_counts.values,
-                        title="Top 15 Kota Berdasarkan Lowongan",
-                        labels={"x": "Kota", "y": "Jumlah Lowongan"},
-                        color=city_counts.values,
-                        color_continuous_scale="Oranges",
-                    )
-                    fig_city.update_layout(height=350, showlegend=False)
-                    st.plotly_chart(fig_city, use_container_width=True)
+        # --- Chart 2: Salary comparison ---
+        salary_data = []
+        for role in roles:
+            sr = tren_data[role].get("salary_range", {})
+            salary_data.append({
+                "Role": role.split("/")[0].strip(),
+                "Min (jt)": round(sr.get("min_idr", 0) / 1_000_000, 1),
+                "Median (jt)": round(sr.get("median_idr", 0) / 1_000_000, 1),
+                "Max (jt)": round(sr.get("max_idr", 0) / 1_000_000, 1),
+            })
 
-                st.info(f"Data dari {len(jobs_df):,} lowongan kerja dalam database lokal.")
-            else:
-                st.warning(f"File dataset tidak ditemukan: {dataset_path}")
-        else:
-            st.warning("Database lowongan belum siap. Jalankan server FastAPI terlebih dahulu.")
-    except Exception as e:
-        st.error(f"Tidak dapat memuat data tren: {str(e)}")
+        df_salary = pd.DataFrame(salary_data)
+        if not df_salary.empty and df_salary["Median (jt)"].sum() > 0:
+            fig_salary = px.bar(
+                df_salary.melt(id_vars="Role", var_name="Tipe", value_name="Gaji (juta IDR)"),
+                x="Role", y="Gaji (juta IDR)", color="Tipe", barmode="group",
+                title="Perbandingan Range Gaji per Role (Rp juta/bulan)",
+                color_discrete_map={
+                    "Min (jt)": "#85C1E9",
+                    "Median (jt)": "#2E86C1",
+                    "Max (jt)": "#1A5276",
+                },
+            )
+            fig_salary.update_layout(height=380)
+            st.plotly_chart(fig_salary, use_container_width=True)
+
+        # --- Detail cards per category ---
+        st.divider()
+        st.markdown("### Detail per Kategori")
+        cols = st.columns(2)
+        for i, role in enumerate(roles):
+            data = tren_data[role]
+            signal = data.get("growth_signal", "medium")
+            signal_label = {"high": "📈 Tinggi", "medium": "➡️ Sedang", "low": "📉 Rendah"}.get(signal, "➡️ Sedang")
+            sr = data.get("salary_range", {})
+            companies = data.get("top_companies", [])
+
+            with cols[i % 2]:
+                with st.expander(f"**{role}** — {signal_label}"):
+                    if sr.get("median_idr"):
+                        st.markdown(f"**Gaji Median:** {format_idr(sr['median_idr'])}/bulan")
+                        st.markdown(f"**Range:** {format_idr(sr['min_idr'])} – {format_idr(sr['max_idr'])}")
+                    if companies:
+                        st.markdown(f"**Perusahaan Hiring:** {', '.join(companies[:5])}")
+                    summary = data.get("trend_summary", "")
+                    if summary:
+                        st.markdown(f"**Tren:** {summary[:200]}...")
 
 
 # ---------------------------------------------------------------------------
@@ -604,43 +692,41 @@ elif halaman == "ℹ️ Tentang":
 
     Indo-Career AI adalah platform rekomendasi karier berbasis kecerdasan buatan yang dirancang khusus untuk pasar kerja teknologi Indonesia.
 
-    ### Arsitektur Multi-Agen
+    ### Arsitektur Multi-Agen (Fan-Out / Fan-In)
+
+    ```
+    coordinator → [profiler ∥ analyst] → gap_analyzer → strategist → END
+                   (PARALEL)             (Fan-In)
+    ```
 
     | Agen | Fungsi |
     |------|--------|
-    | **The Coordinator** | Mengatur alur analisis dan memvalidasi input |
-    | **The Profiler** | Menganalisis CV dan mengekstrak keahlian (termasuk yang tersembunyi) |
-    | **The Market Analyst** | Memindai lowongan dan tren pasar Indonesia |
-    | **The Gap Analyzer** | Membandingkan profil pengguna vs kebutuhan pasar |
-    | **The Strategist** | Menyusun peta jalan karier 6 bulan berbasis konteks Indonesia |
+    | **Coordinator** | Validasi input, trigger paralel via LangGraph Send API |
+    | **Profiler** (paralel) | Analisis CV, ekstrak keahlian tersembunyi + SKKNI |
+    | **Market Analyst** (paralel) | Cari lowongan real-time via Tavily, data gaji IDR |
+    | **Gap Analyzer** | Fan-In: bandingkan profil vs kebutuhan pasar |
+    | **Strategist** | Roadmap 6 bulan dipersonalisasi untuk pasar Indonesia |
 
     ### Teknologi
     - **LangGraph** — Orchestrasi multi-agen dengan pola Fan-Out/Fan-In
-    - **Claude 3.5 Sonnet / GPT-4o** — Model bahasa via OpenRouter
-    - **SBERT** (`all-MiniLM-L6-v2`) — Embedding semantik untuk pencocokan lowongan
-    - **ChromaDB** — Database vektor lokal (4.000+ lowongan terindeks)
+    - **Tavily AI** — Pencarian lowongan real-time (LinkedIn, JobStreet, Glints)
+    - **FAISS + text-embedding-3-small** — Semantic similarity untuk pencocokan lowongan
+    - **Claude Haiku** (paralel agents) + **Claude Sonnet** (sequential agents)
     - **FastAPI** — Backend API
     - **Streamlit** — Frontend UI
 
-    ### Cara Menjalankan
-    ```bash
-    # 1. Install dependencies
-    pip install -r requirements.txt
-
-    # 2. Konfigurasi environment
-    cp .env.example .env
-    # Edit .env: masukkan OPENROUTER_API_KEY dan SERPER_API_KEY
-
-    # 3. Jalankan backend
-    uvicorn main:app --reload
-
-    # 4. Jalankan frontend (terminal baru)
-    streamlit run app.py
+    ### Konfigurasi `.env`
+    ```env
+    TAVILY_API_KEY=tvly-...          # Daftar gratis: tavily.com
+    ANTHROPIC_API_KEY=sk-ant-...    # Opsional (primary LLM)
+    OPENAI_API_KEY=sk-or-v1-...     # OpenRouter fallback
+    OPENAI_BASE_URL=https://openrouter.ai/api/v1
+    AI_MODEL=x-ai/grok-4-fast
     ```
 
     ### Konteks Indonesia
     - Sertifikasi: BNSP, Digitalent Kominfo
     - Platform belajar: Dicoding, Binar Academy, Hacktiv8, Bangkit, RevoU
     - Komunitas: PHP Indonesia, Python ID, JavaScript Indonesia, Data Science Indonesia
+    - Gaji dalam IDR (Rupiah), kota fokus: Jakarta, Bandung, Surabaya, Yogyakarta
     """)
-

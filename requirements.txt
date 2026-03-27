@@ -27,11 +27,16 @@ pymupdf>=1.24.0
 
 # Vector search (TF-IDF via scikit-learn, already installed above)
 
-# HTTP / scraping & real-time job search
+# Real-time job search & data (Tavily menggantikan DuckDuckGo)
 requests>=2.31.0
-beautifulsoup4>=4.12.0
-duckduckgo-search>=6.0.0
-ddgs>=0.3.0
+tavily-python>=0.3.0
+langchain-community>=0.2.0
+
+# Vector embeddings (FAISS in-memory + OpenAI embeddings)
+faiss-cpu>=1.8.0
+
+# Attachment parsing (DOCX support)
+python-docx>=1.1.0
 
 # Utilities
 python-dotenv>=1.0.0

@@ -34,6 +34,9 @@ Fokus pada:
    - Manajemen Proyek TI
    - Infrastruktur TI dan Jaringan
 
+Jika tersedia, pertimbangkan "Konteks Tambahan" dan "Lampiran Tambahan" dari pengguna
+untuk mempersonalisasi analisis (preferensi kerja, minat transisi, dokumen pendukung).
+
 Kembalikan HANYA JSON valid dengan struktur berikut (tanpa teks atau markdown di luar JSON):
 {
   "nama": "string",
@@ -75,6 +78,9 @@ def profiler_node(state: CareerState) -> dict:
             logger.info(f"Profiler: mengambil data GitHub dari {github_url}")
             github_data = extract_github_profile(github_url)
 
+        additional_context = state.get("additional_context", "")
+        attachments_text = state.get("attachments_text", "")
+
         # Build user message
         user_content = f"Target Posisi: {target_role}\n\n--- ISI CV ---\n{cv_text}"
         if github_data:
@@ -83,6 +89,10 @@ def profiler_node(state: CareerState) -> dict:
             user_content += f"Bio: {github_data.get('bio', '')}\n"
             user_content += f"Bahasa: {', '.join(github_data.get('languages', []))}\n"
             user_content += f"Repo: {'; '.join(github_data.get('top_repos', []))}\n"
+        if additional_context:
+            user_content += f"\n\n--- KONTEKS TAMBAHAN DARI PENGGUNA ---\n{additional_context}"
+        if attachments_text:
+            user_content += f"\n\n--- DOKUMEN LAMPIRAN TAMBAHAN ---\n{attachments_text[:8000]}"
 
         llm = _get_llm()
         messages = [

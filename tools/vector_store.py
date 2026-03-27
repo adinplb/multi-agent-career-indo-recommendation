@@ -1,244 +1,169 @@
 """
-Real-Time Job Store
-Menggantikan TF-IDF + CSV lama dengan pencarian lowongan real-time.
+Vector Store Tool — Real-time Job Search dengan FAISS Semantic Embeddings.
 
-Sumber data:
-- LinkedIn Jobs (via DuckDuckGo site:linkedin.com/jobs)
-- JobStreet Indonesia, Glints, Kalibrr, Karir.com (via DuckDuckGo)
-- Informasi bootcamp Indonesia (Dicoding, Bangkit, Hacktiv8, Binar, RevoU)
+Arsitektur:
+1. Tavily search → ambil lowongan real-time dari LinkedIn/JobStreet/Glints
+2. OpenAI text-embedding-3-small → embed job snippets (via OpenRouter)
+3. FAISS IndexFlatIP → semantic similarity search in-memory
+4. Fallback: TF-IDF cosine similarity jika FAISS/embedding gagal
 
-Tidak ada dataset lokal, tidak ada model download.
-Semua data diambil langsung dari internet saat query dilakukan.
+Tidak ada dataset lokal, tidak ada persistence — fresh per session.
+Public signatures identik dengan versi lama (backward compatible).
 """
+import os
 import logging
-import time
-from typing import Optional
+import numpy as np
 from functools import lru_cache
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
+OPENAI_API_KEY  = os.getenv("OPENAI_API_KEY", "")
+OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://openrouter.ai/api/v1")
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
+
 
 # ---------------------------------------------------------------------------
-# Compatibility shim — get_sbert_model() dipanggil oleh analyst.py
+# Compatibility shim
 # ---------------------------------------------------------------------------
 
 @lru_cache(maxsize=1)
-def get_sbert_model(model_name: str = "realtime"):
-    """Compatibility alias — tidak perlu model, pencarian real-time."""
+def get_sbert_model(model_name: str = "faiss"):
+    """Compatibility alias — returns None (FAISS tidak butuh model object terpisah)."""
     return None
 
-
-# ---------------------------------------------------------------------------
-# DuckDuckGo helper (shared)
-# ---------------------------------------------------------------------------
-
-def _ddg_search(query: str, num_results: int = 10, region: str = "id-id") -> list[dict]:
-    """Core DuckDuckGo search, targeting Indonesia."""
-    try:
-        try:
-            from ddgs import DDGS
-        except ImportError:
-            from duckduckgo_search import DDGS
-    except ImportError:
-        logger.warning("Search package tidak terinstall. Jalankan: pip install ddgs")
-        return []
-
-    try:
-        with DDGS() as ddgs:
-            results = list(ddgs.text(
-                query,
-                region=region,
-                safesearch="off",
-                max_results=num_results,
-            ))
-        return results
-    except Exception as e:
-        logger.warning(f"DuckDuckGo search gagal untuk '{query[:60]}': {e}")
-        time.sleep(1)
-        return []
-
-
-# ---------------------------------------------------------------------------
-# Pencarian lowongan real-time dari LinkedIn + job boards Indonesia
-# ---------------------------------------------------------------------------
-
-def search_linkedin_jobs(role: str, location: str = "Indonesia", num_results: int = 8) -> list[dict]:
-    """
-    Mencari lowongan LinkedIn via DuckDuckGo site:linkedin.com/jobs.
-    Mengembalikan list job dict dengan keys: title, company, location, link, snippet, source.
-    """
-    query = f'site:linkedin.com/jobs "{role}" {location}'
-    results = _ddg_search(query, num_results=num_results)
-
-    jobs = []
-    for r in results:
-        title = r.get("title", "")
-        # Hapus suffix LinkedIn yang umum ("... | LinkedIn")
-        if " | LinkedIn" in title:
-            title = title.split(" | LinkedIn")[0].strip()
-        if " - LinkedIn" in title:
-            title = title.split(" - LinkedIn")[0].strip()
-
-        jobs.append({
-            "job_id": f"li_{len(jobs)}",
-            "title": title,
-            "company": _extract_company_from_linkedin(r.get("title", ""), r.get("body", "")),
-            "city": location,
-            "salary": "Lihat di LinkedIn",
-            "employment_type": "",
-            "industry": "",
-            "link": r.get("href", ""),
-            "snippet": r.get("body", "")[:200],
-            "source": "LinkedIn",
-            "match_score": 0.9,
-            "distance": 0.1,
-        })
-
-    return jobs
-
-
-def _extract_company_from_linkedin(title: str, body: str) -> str:
-    """Ekstrak nama perusahaan dari snippet LinkedIn."""
-    # Format LinkedIn: "Job Title at Company Name | LinkedIn" atau "Job Title - Company"
-    for sep in [" at ", " di ", " @ "]:
-        if sep in title:
-            parts = title.split(sep)
-            if len(parts) >= 2:
-                company = parts[1].split(" | ")[0].split(" - ")[0].strip()
-                if company:
-                    return company
-
-    # Coba dari body snippet
-    body_lower = body.lower()
-    known = [
-        "Gojek", "GoTo", "Tokopedia", "Traveloka", "Bukalapak", "Shopee",
-        "Grab", "OVO", "Dana", "Tiket.com", "Blibli", "Lazada", "Akulaku",
-        "Xendit", "Flip", "Midtrans", "Telkom", "Telkomsel", "BCA Digital",
-        "Bank Jago", "Ruangguru", "Cakap", "Kargo", "SiCepat", "Privy",
-    ]
-    for c in known:
-        if c.lower() in body_lower:
-            return c
-
-    return "Perusahaan di LinkedIn"
-
-
-def search_jobstreet_jobs(role: str, num_results: int = 5) -> list[dict]:
-    """Mencari lowongan dari JobStreet Indonesia."""
-    query = f'site:jobstreet.co.id "{role}" Indonesia'
-    results = _ddg_search(query, num_results=num_results)
-    return [
-        {
-            "job_id": f"js_{i}",
-            "title": r.get("title", "").replace(" | JobStreet", "").strip(),
-            "company": "",
-            "city": "Indonesia",
-            "salary": "",
-            "employment_type": "",
-            "industry": "",
-            "link": r.get("href", ""),
-            "snippet": r.get("body", "")[:200],
-            "source": "JobStreet",
-            "match_score": 0.8,
-            "distance": 0.2,
-        }
-        for i, r in enumerate(results)
-    ]
-
-
-def search_glints_jobs(role: str, num_results: int = 5) -> list[dict]:
-    """Mencari lowongan dari Glints Indonesia."""
-    query = f'site:glints.com "{role}" Indonesia'
-    results = _ddg_search(query, num_results=num_results)
-    return [
-        {
-            "job_id": f"gl_{i}",
-            "title": r.get("title", "").replace(" | Glints", "").strip(),
-            "company": "",
-            "city": "Indonesia",
-            "salary": "",
-            "employment_type": "",
-            "industry": "",
-            "link": r.get("href", ""),
-            "snippet": r.get("body", "")[:200],
-            "source": "Glints",
-            "match_score": 0.75,
-            "distance": 0.25,
-        }
-        for i, r in enumerate(results)
-    ]
-
-
-def search_bootcamp_info(role: str, num_results: int = 6) -> list[dict]:
-    """
-    Mencari informasi bootcamp dan kursus Indonesia yang relevan dengan role.
-    Platform: Dicoding, Bangkit, Hacktiv8, Binar Academy, RevoU, Digitalent Kominfo.
-    """
-    query = f"bootcamp kursus {role} Indonesia Dicoding Bangkit Hacktiv8 RevoU 2025"
-    results = _ddg_search(query, num_results=num_results)
-    return [
-        {
-            "job_id": f"bc_{i}",
-            "title": r.get("title", ""),
-            "company": _detect_platform(r.get("href", ""), r.get("title", "")),
-            "city": "Online / Indonesia",
-            "salary": "",
-            "employment_type": "Bootcamp/Kursus",
-            "industry": "Pendidikan Teknologi",
-            "link": r.get("href", ""),
-            "snippet": r.get("body", "")[:200],
-            "source": "Bootcamp",
-            "match_score": 0.7,
-            "distance": 0.3,
-        }
-        for i, r in enumerate(results)
-    ]
-
-
-def _detect_platform(url: str, title: str) -> str:
-    """Deteksi platform dari URL atau judul."""
-    text = (url + " " + title).lower()
-    platforms = {
-        "dicoding": "Dicoding",
-        "bangkit": "Bangkit (Google x GoTo x Traveloka)",
-        "hacktiv8": "Hacktiv8",
-        "binar": "Binar Academy",
-        "revou": "RevoU",
-        "digitalent": "Digitalent Kominfo",
-        "kominfo": "Digitalent Kominfo",
-        "coursera": "Coursera",
-        "udemy": "Udemy",
-        "ruangguru": "Ruangguru",
-    }
-    for key, name in platforms.items():
-        if key in text:
-            return name
-    return "Platform Online"
-
-
-# ---------------------------------------------------------------------------
-# Fungsi utama: pencarian lowongan gabungan (LinkedIn + job boards)
-# ---------------------------------------------------------------------------
 
 def get_or_build_job_collection(
     dataset_path=None,
     onet_path=None,
-    model_name: str = "realtime",
+    model_name: str = "faiss",
 ):
     """
-    Compatibility shim untuk main.py lifespan warmup.
-    Mode real-time: tidak ada dataset lokal — mengembalikan index kosong.
-    Pencarian sebenarnya dilakukan via search_similar_jobs() saat diperlukan.
+    Compatibility shim untuk main.py lifespan.
+    Mode real-time — tidak ada dataset lokal.
+    Mengembalikan empty collection dict.
+    Pencarian sebenarnya dilakukan on-demand via search_similar_jobs().
     """
-    logger.info("Mode real-time aktif — tidak ada dataset lokal yang diload.")
+    logger.info("Mode real-time aktif (Tavily + FAISS) — tidak ada dataset lokal.")
     return {
         "mode": "realtime",
+        "index": None,
         "vectorizer": None,
         "matrix": None,
         "metadatas": [],
         "documents": [],
     }
 
+
+# ---------------------------------------------------------------------------
+# Embedding layer
+# ---------------------------------------------------------------------------
+
+def _embed_with_openai(texts: list[str]) -> np.ndarray:
+    """
+    Embed teks menggunakan OpenAI text-embedding-3-small via OpenRouter.
+    Menggunakan OPENAI_API_KEY + OPENAI_BASE_URL yang sudah ada di .env.
+    Raises Exception jika gagal → caller fall back ke TF-IDF.
+    """
+    from langchain_openai import OpenAIEmbeddings
+
+    embedder = OpenAIEmbeddings(
+        model=EMBEDDING_MODEL,
+        api_key=OPENAI_API_KEY,
+        base_url=OPENAI_BASE_URL,
+        chunk_size=100,
+    )
+    vectors = embedder.embed_documents(texts)
+    return np.array(vectors, dtype=np.float32)
+
+
+def _embed_query_openai(query: str) -> np.ndarray:
+    """Embed single query string."""
+    from langchain_openai import OpenAIEmbeddings
+    embedder = OpenAIEmbeddings(
+        model=EMBEDDING_MODEL,
+        api_key=OPENAI_API_KEY,
+        base_url=OPENAI_BASE_URL,
+    )
+    vec = embedder.embed_query(query)
+    return np.array([vec], dtype=np.float32)
+
+
+def _tfidf_scores(docs: list[str], query: str) -> np.ndarray:
+    """
+    TF-IDF cosine similarity fallback.
+    Returns score array aligned with docs list.
+    """
+    from sklearn.feature_extraction.text import TfidfVectorizer
+    from sklearn.metrics.pairwise import cosine_similarity
+
+    if not docs:
+        return np.array([])
+
+    vectorizer = TfidfVectorizer(max_features=5000, ngram_range=(1, 2), stop_words="english")
+    try:
+        matrix = vectorizer.fit_transform(docs)
+        query_vec = vectorizer.transform([query])
+        scores = cosine_similarity(query_vec, matrix).flatten()
+        return scores
+    except Exception:
+        return np.zeros(len(docs))
+
+
+# ---------------------------------------------------------------------------
+# FAISS index builder
+# ---------------------------------------------------------------------------
+
+def build_faiss_index(job_docs: list[str], job_metas: list[dict]) -> dict:
+    """
+    Bangun FAISS IndexFlatIP in-memory dari job snippets.
+    Gunakan inner product (cosine similarity setelah L2 normalization).
+
+    Returns dict dengan keys:
+      mode, index (faiss), metadatas, documents — atau TF-IDF shim jika gagal.
+    """
+    if not job_docs:
+        return get_or_build_job_collection()
+
+    try:
+        import faiss
+
+        vectors = _embed_with_openai(job_docs)
+
+        # L2 normalize untuk cosine similarity via inner product
+        norms = np.linalg.norm(vectors, axis=1, keepdims=True)
+        norms = np.where(norms == 0, 1e-9, norms)
+        vectors = vectors / norms
+
+        dim = vectors.shape[1]
+        index = faiss.IndexFlatIP(dim)
+        index.add(vectors)
+
+        logger.info("FAISS index built: %d docs, dim=%d", len(job_docs), dim)
+        return {
+            "mode": "faiss",
+            "index": index,
+            "metadatas": job_metas,
+            "documents": job_docs,
+            "vectorizer": None,
+            "matrix": None,
+        }
+
+    except Exception as e:
+        logger.warning("FAISS index build gagal (%s) — fallback ke TF-IDF shim", e)
+        return {
+            "mode": "tfidf_fallback",
+            "index": None,
+            "vectorizer": None,
+            "matrix": None,
+            "metadatas": job_metas,
+            "documents": job_docs,
+        }
+
+
+# ---------------------------------------------------------------------------
+# Main search function
+# ---------------------------------------------------------------------------
 
 def search_similar_jobs(
     collection,
@@ -249,35 +174,103 @@ def search_similar_jobs(
     filter_industry: Optional[str] = None,
 ) -> list[dict]:
     """
-    Pencarian lowongan real-time dari LinkedIn + job boards Indonesia.
-    Menggantikan TF-IDF cosine similarity atas dataset CSV lama.
+    Pencarian lowongan semantik real-time:
+    1. Tavily → ambil lowongan terbaru
+    2. Build FAISS index dari hasil Tavily
+    3. Semantic search → return jobs diurutkan by match_score
 
-    collection dan model parameter diabaikan (compatibility shim).
+    collection dan model parameter dipertahankan untuk backward compatibility.
     """
-    logger.info(f"Mencari lowongan real-time untuk: '{query_text}'")
+    logger.info("Pencarian lowongan real-time untuk: '%s'", query_text)
 
-    all_jobs = []
+    from tools.tavily_search import search_jobs_tavily
 
-    # 1. LinkedIn (sumber utama — paling banyak digunakan recruiter Indonesia)
-    linkedin_jobs = search_linkedin_jobs(query_text, num_results=min(n_results, 8))
-    all_jobs.extend(linkedin_jobs)
+    # Ambil lowongan dari Tavily (1 credit)
+    raw_jobs = search_jobs_tavily(query_text, num_results=max(n_results, 10))
 
-    # 2. JobStreet Indonesia (sumber kedua terbesar)
-    if len(all_jobs) < n_results:
-        js_jobs = search_jobstreet_jobs(query_text, num_results=4)
-        all_jobs.extend(js_jobs)
+    if not raw_jobs:
+        logger.warning("Tavily tidak mengembalikan hasil untuk '%s'", query_text)
+        return []
 
-    # 3. Glints (banyak startup Indonesia)
-    if len(all_jobs) < n_results:
-        glints_jobs = search_glints_jobs(query_text, num_results=3)
-        all_jobs.extend(glints_jobs)
+    # Siapkan dokumen untuk indexing
+    job_docs = [
+        f"{j.get('title', '')} {j.get('company', '')} {j.get('snippet', '')}"
+        for j in raw_jobs
+    ]
 
-    # Re-index job_id agar unik
-    for i, job in enumerate(all_jobs):
-        job["job_id"] = f"rt_{i}"
+    # Build FAISS index
+    try:
+        collection = build_faiss_index(job_docs, raw_jobs)
+    except Exception as e:
+        logger.warning("Index build error: %s — return raw Tavily results", e)
+        return raw_jobs[:n_results]
 
-    return all_jobs[:n_results]
+    # Search
+    if collection.get("mode") == "faiss" and collection.get("index") is not None:
+        results = _faiss_search(collection, query_text, n_results)
+    else:
+        results = _tfidf_search_jobs(collection, query_text, n_results)
 
+    return results
+
+
+def _faiss_search(collection: dict, query_text: str, n_results: int) -> list[dict]:
+    """Semantic search menggunakan FAISS index yang sudah dibangun."""
+    try:
+        query_vec = _embed_query_openai(query_text)
+        # L2 normalize
+        norm = np.linalg.norm(query_vec)
+        if norm > 0:
+            query_vec = query_vec / norm
+
+        index = collection["index"]
+        metadatas = collection["metadatas"]
+
+        k = min(n_results, index.ntotal)
+        scores, indices = index.search(query_vec, k)
+
+        results = []
+        for score, idx in zip(scores[0], indices[0]):
+            if idx < 0 or idx >= len(metadatas):
+                continue
+            job = dict(metadatas[idx])
+            job["match_score"] = float(max(0, score))
+            job["distance"] = float(max(0, 1 - score))
+            results.append(job)
+
+        return results
+
+    except Exception as e:
+        logger.warning("FAISS search error: %s — fallback TF-IDF", e)
+        return _tfidf_search_jobs(collection, query_text, n_results)
+
+
+def _tfidf_search_jobs(collection: dict, query_text: str, n_results: int) -> list[dict]:
+    """TF-IDF fallback search."""
+    docs = collection.get("documents", [])
+    metas = collection.get("metadatas", [])
+
+    if not docs:
+        return []
+
+    scores = _tfidf_scores(docs, query_text)
+    top_indices = np.argsort(scores)[::-1][:n_results]
+
+    results = []
+    for idx in top_indices:
+        if scores[idx] <= 0 or idx >= len(metas):
+            continue
+        job = dict(metas[idx])
+        job["match_score"] = float(scores[idx])
+        job["distance"] = float(1 - scores[idx])
+        results.append(job)
+
+    return results
+
+
+# ---------------------------------------------------------------------------
+# Skill-based search
+# ---------------------------------------------------------------------------
 
 def search_by_skills(
     collection,
@@ -288,5 +281,5 @@ def search_by_skills(
     """Mencari lowongan berdasarkan daftar skill."""
     if not skills:
         return []
-    query = " ".join(skills[:5])
+    query = " ".join(skills[:6])
     return search_similar_jobs(collection, query, n_results=n_results)

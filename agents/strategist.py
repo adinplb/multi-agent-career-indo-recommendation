@@ -85,6 +85,7 @@ def strategist_node(state: CareerState) -> dict:
         target_role = state.get("target_role", "")
         user_name = state.get("user_name", "")
 
+        additional_context = state.get("additional_context", "")
         logger.info("Strategist: menyusun peta jalan karier 6 bulan...")
 
         # Format salary for readability
@@ -122,6 +123,10 @@ Prioritas Utama: {', '.join(skill_gaps.get('keahlian_prioritas', [])[:3])}
 Rekomendasi Sertifikasi: {', '.join(skill_gaps.get('rekomendasi_sertifikasi', [])[:5])}
 Estimasi Waktu Siap: {skill_gaps.get('estimasi_waktu_siap', '3-6 bulan')}
 Analisis Gap: {skill_gaps.get('analisis_gap', 'N/A')}"""
+
+        if additional_context:
+            context += f"\n\nPREFERENSI & KONTEKS PENGGUNA:\n{additional_context}"
+            context += "\n(Sesuaikan roadmap berdasarkan preferensi di atas — misalnya: remote vs onsite, startup vs korporat, transisi karier, minat spesifik, batasan waktu belajar, dll.)"
 
         llm = _get_llm()
         messages = [
