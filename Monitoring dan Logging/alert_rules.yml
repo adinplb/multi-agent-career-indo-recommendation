@@ -1,0 +1,46 @@
+groups:
+  - name: career_classifier_alerts
+    interval: 10s
+    rules:
+
+      # Alert 1: High Prediction Latency
+      - alert: HighPredictionLatency
+        expr: histogram_quantile(0.95, rate(model_prediction_latency_seconds_bucket[1m])) > 2.0
+        for: 1m
+        labels:
+          severity: warning
+          team: ml-ops
+        annotations:
+          summary: "Latency prediksi model tinggi"
+          description: >
+            P95 latency prediksi model melebihi 2 detik selama 1 menit terakhir.
+            Nilai saat ini: {{ $value | humanizeDuration }}.
+
+      # Alert 2: High Error Rate
+      - alert: HighModelErrorRate
+        expr: >
+          rate(model_error_total[5m]) /
+          (rate(model_prediction_total[5m]) + 0.001) > 0.05
+        for: 2m
+        labels:
+          severity: critical
+          team: ml-ops
+        annotations:
+          summary: "Error rate model prediksi tinggi"
+          description: >
+            Error rate model melebihi 5% dalam 5 menit terakhir.
+            Error rate saat ini: {{ $value | humanizePercentage }}.
+
+      # Alert 3: Low Confidence Score
+      - alert: LowModelConfidenceScore
+        expr: model_confidence_score < 0.5
+        for: 3m
+        labels:
+          severity: warning
+          team: ml-ops
+        annotations:
+          summary: "Confidence score model rendah"
+          description: >
+            Rata-rata confidence score model di bawah 0.5 selama 3 menit terakhir.
+            Nilai saat ini: {{ $value }}.
+            Model mungkin mengalami degradasi atau menerima input di luar distribusi.
