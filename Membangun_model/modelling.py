@@ -1,7 +1,7 @@
 """
 modelling.py — Kriteria 2 (Basic)
 Melatih model klasifikasi pekerjaan Indonesia menggunakan MLflow autolog.
-Menyimpan artefak ke MLflow Tracking UI lokal (localhost).
+Menyimpan artefak ke MLflow Tracking UI lokal (mlruns/).
 
 Usage:
     python modelling.py
@@ -10,7 +10,15 @@ Usage:
 """
 
 import argparse
+import os
+import warnings
 
+# Workaround: cegah autolog scan torch yang menyebabkan DLL error di Windows
+os.environ.setdefault("PYTORCH_JIT", "0")
+os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
+warnings.filterwarnings("ignore")
+
+import torch  # pre-import to initialize DLLs before mlflow autolog scans sklearn
 import mlflow
 import mlflow.sklearn
 import pandas as pd
@@ -49,41 +57,31 @@ def main(dataset_path: str, use_dagshub: bool = False) -> None:
     setup_mlflow(use_dagshub)
     X_train, X_test, y_train, y_test = load_data(dataset_path)
 
-    with mlflow.start_run(run_name="baseline_logreg_autolog"):
-        tfidf_params = {"max_features": 5000, "ngram_range": (1, 2), "sublinear_tf": True}
-        clf_params   = {"max_iter": 1000, "C": 1.0, "random_state": 42, "multi_class": "multinomial"}
+    # Aktifkan autolog (Kriteria 2 Basic)
+    mlflow.sklearn.autolog(
+        log_models=True,
+        log_input_examples=True,
+        silent=True,
+    )
 
+    with mlflow.start_run(run_name="baseline_logreg_autolog"):
         pipeline = Pipeline([
-            ("tfidf", TfidfVectorizer(**tfidf_params)),
-            ("clf",   LogisticRegression(**clf_params)),
+            ("tfidf", TfidfVectorizer(max_features=5000, ngram_range=(1, 2), sublinear_tf=True)),
+            ("clf",   LogisticRegression(max_iter=1000, C=1.0, random_state=42)),
         ])
+
         pipeline.fit(X_train, y_train)
         y_pred = pipeline.predict(X_test)
 
         acc = accuracy_score(y_test, y_pred)
         f1  = f1_score(y_test, y_pred, average="weighted")
 
-        # Log params
-        mlflow.log_param("tfidf__max_features", tfidf_params["max_features"])
-        mlflow.log_param("tfidf__ngram_range",  str(tfidf_params["ngram_range"]))
-        mlflow.log_param("tfidf__sublinear_tf", tfidf_params["sublinear_tf"])
-        mlflow.log_param("clf__C",              clf_params["C"])
-        mlflow.log_param("clf__max_iter",       clf_params["max_iter"])
-        mlflow.log_param("clf__multi_class",    clf_params["multi_class"])
-
-        # Log metrics
-        mlflow.log_metric("accuracy",    acc)
-        mlflow.log_metric("f1_weighted", f1)
-
-        # Log model
-        mlflow.sklearn.log_model(pipeline, "model")
-
         print(f"\n=== Hasil Training ===")
         print(f"Accuracy : {acc:.4f}")
         print(f"F1-Score : {f1:.4f}")
         print(f"\nClassification Report:\n{classification_report(y_test, y_pred)}")
         print(f"\nMLflow Run ID: {mlflow.active_run().info.run_id}")
-        print("Model dan metrics berhasil di-log ke MLflow.")
+        print("Model dan metrics berhasil di-log ke MLflow (autolog).")
 
 
 if __name__ == "__main__":

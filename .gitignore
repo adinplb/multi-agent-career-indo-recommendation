@@ -18,6 +18,9 @@ env/
 # Model cache
 .cache/
 model/
+mlruns/
+!Membangun_model/mlruns/
+*.pkl
 
 # OS
 .DS_Store
