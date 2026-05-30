@@ -11,6 +11,7 @@ Usage:
 
 import argparse
 import os
+import pickle
 import warnings
 
 # Workaround: cegah autolog scan torch yang menyebabkan DLL error di Windows
@@ -80,6 +81,11 @@ def main(dataset_path: str, use_dagshub: bool = False) -> None:
         print(f"Accuracy : {acc:.4f}")
         print(f"F1-Score : {f1:.4f}")
         print(f"\nClassification Report:\n{classification_report(y_test, y_pred)}")
+        model_pkl_path = os.path.join(os.path.dirname(__file__) or ".", "model.pkl")
+        with open(model_pkl_path, "wb") as f:
+            pickle.dump(pipeline, f)
+        print(f"Model disimpan ke: {model_pkl_path}")
+
         print(f"\nMLflow Run ID: {mlflow.active_run().info.run_id}")
         print("Model dan metrics berhasil di-log ke MLflow (autolog).")
 
