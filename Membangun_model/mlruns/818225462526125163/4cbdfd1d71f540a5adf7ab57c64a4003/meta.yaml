@@ -1,0 +1,15 @@
+artifact_uri: file:D:/SMSML_Muhammad-Adin-Palimbani/Membangun_model/mlruns/818225462526125163/4cbdfd1d71f540a5adf7ab57c64a4003/artifacts
+end_time: 1780119703384
+entry_point_name: ''
+experiment_id: '818225462526125163'
+lifecycle_stage: active
+run_id: 4cbdfd1d71f540a5adf7ab57c64a4003
+run_name: baseline_logreg_autolog
+run_uuid: 4cbdfd1d71f540a5adf7ab57c64a4003
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1780119700242
+status: 3
+tags: []
+user_id: muhammad.palimbani
